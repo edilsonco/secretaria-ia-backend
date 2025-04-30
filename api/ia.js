@@ -1,36 +1,40 @@
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ message: 'Método não permitido' });
-  }
-
-  const { mensagem } = req.body;
-
-  if (!mensagem) {
-    return res.status(400).json({ message: 'Mensagem vazia' });
-  }
-
   try {
+    if (req.method !== 'POST') {
+      return res.status(405).json({ erro: 'Método não permitido. Use POST.' });
+    }
+
+    const { mensagem } = req.body;
+
+    if (!mensagem || typeof mensagem !== 'string') {
+      return res.status(400).json({ erro: 'Mensagem inválida.' });
+    }
+
     const resposta = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
       },
       body: JSON.stringify({
-        model: 'gpt-4',
+        model: 'gpt-3.5-turbo',
         messages: [
-          { role: 'system', content: 'Você é uma assistente pessoal que ajuda a organizar compromissos de forma simples e prática.' },
-          { role: 'user', content: mensagem },
+          { role: 'system', content: 'Você é uma secretária inteligente. Sua tarefa é interpretar instruções do usuário para agendar, desmarcar ou lembrar eventos, e responder de forma clara e objetiva.' },
+          { role: 'user', content: mensagem }
         ],
-        temperature: 0.6,
-      }),
+        temperature: 0.7
+      })
     });
 
     const data = await resposta.json();
-    const respostaTexto = data.choices?.[0]?.message?.content || 'Erro ao interpretar a mensagem.';
 
-    res.status(200).json({ resposta: respostaTexto });
+    if (data.choices && data.choices.length > 0) {
+      return res.status(200).json({ resposta: data.choices[0].message.content });
+    } else {
+      return res.status(500).json({ erro: 'Resposta inválida da OpenAI.', detalhes: data });
+    }
+
   } catch (erro) {
-    res.status(500).json({ message: 'Erro ao consultar a OpenAI', erro: erro.message });
+    return res.status(500).json({ erro: 'Erro interno.', detalhes: erro.message });
   }
 }
