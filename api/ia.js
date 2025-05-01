@@ -1,112 +1,62 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient } from '@supabase/supabase-js'
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+)
 
 export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  const { mensagem } = req.body
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+  const textoMinusculo = mensagem.toLowerCase()
+  const desmarcarSinonimos = ['desmarcar', 'desmarca', 'cancelar', 'cancela', 'remover', 'remova', 'excluir', 'exclui', 'apagar', 'apaga']
+  const editarSinonimos = ['editar', 'edite', 'atualizar', 'atualize', 'modificar', 'modifica', 'muda', 'mude', 'altere', 'altera', 'troca', 'trocar']
 
-  const { mensagem } = req.body;
+  const contemAlgum = (lista) => lista.some((palavra) => textoMinusculo.startsWith(palavra))
+  let respostaTexto = ''
 
-  if (!mensagem) {
-    return res.status(400).json({ erro: 'Mensagem não fornecida.' });
-  }
+  // 🗑️ DESMARCAR COMPROMISSO
+  if (contemAlgum(desmarcarSinonimos)) {
+    const termoBusca = mensagem.slice(mensagem.indexOf(' ') + 1).trim()
 
-  const msgLower = mensagem.toLowerCase();
-
-  // 🗑️ Desmarcar (deletar do banco)
-  const comandosDesmarcar = ['desmarcar', 'desmarca', 'cancelar', 'cancela', 'remover', 'remova', 'excluir', 'exclui', 'apagar', 'apaga'];
-  const encontrouDesmarcar = comandosDesmarcar.find(comando => msgLower.startsWith(comando));
-
-  if (encontrouDesmarcar) {
-    const termoBusca = mensagem.slice(encontrouDesmarcar.length).trim();
-
-    const { data: compromissosEncontrados } = await supabase
+    const { data: encontrados } = await supabase
       .from('compromissos')
       .select('id, mensagem_original')
       .ilike('mensagem_original', `%${termoBusca}%`)
-      .order('id', { ascending: false });
+      .order('id', { ascending: false })
 
-    if (compromissosEncontrados && compromissosEncontrados.length > 0) {
-      const compromissoParaApagar = compromissosEncontrados[0];
-
-      await supabase
-        .from('compromissos')
-        .delete()
-        .eq('id', compromissoParaApagar.id);
-
-      return res.status(200).json({
-        resposta: `O compromisso relacionado a "${termoBusca}" foi desmarcado com sucesso.`
-      });
+    if (encontrados && encontrados.length > 0) {
+      await supabase.from('compromissos').delete().eq('id', encontrados[0].id)
+      return res.status(200).json({ resposta: `O compromisso relacionado a "${termoBusca}" foi desmarcado com sucesso.` })
     } else {
-      return res.status(200).json({
-        resposta: `Não encontrei nenhum compromisso relacionado a "${termoBusca}".`
-      });
+      return res.status(200).json({ resposta: `Não encontrei nenhum compromisso com "${termoBusca}".` })
     }
   }
 
-  // ✏️ Alterar (editar mensagem salva)
-  const comandosEditar = ['editar', 'muda', 'mudar', 'altera', 'alterar', 'troca', 'trocar', 'atualiza', 'atualizar', 'modifica', 'modificar'];
-  const encontrouEditar = comandosEditar.find(comando => msgLower.startsWith(comando));
-
-  if (encontrouEditar) {
-    const termoBusca = mensagem.slice(encontrouEditar.length).trim();
-
-    const { data: compromissosEncontrados } = await supabase
-      .from('compromissos')
-      .select('id, mensagem_original')
-      .ilike('mensagem_original', `%${termoBusca}%`)
-      .order('id', { ascending: false });
-
-    if (compromissosEncontrados && compromissosEncontrados.length > 0) {
-      const compromissoParaEditar = compromissosEncontrados[0];
-
-      await supabase
-        .from('compromissos')
-        .update({ mensagem_original: mensagem })
-        .eq('id', compromissoParaEditar.id);
-
-      return res.status(200).json({
-        resposta: `O compromisso foi atualizado com sucesso.`
-      });
-    } else {
-      return res.status(200).json({
-        resposta: `Não encontrei nenhum compromisso correspondente para editar.`
-      });
-    }
+  // ✏️ DETECTAR INTENÇÃO DE EDIÇÃO
+  if (contemAlgum(editarSinonimos)) {
+    return res.status(200).json({ resposta: `Entendido. Por favor, diga qual informação deseja alterar no compromisso.` })
   }
 
-  // 🧠 Memória (leitura de histórico)
-  const { data: compromissos } = await supabase
+  // 🧠 MEMÓRIA – CONSULTA HISTÓRICO
+  const { data: historico } = await supabase
     .from('compromissos')
     .select('mensagem_original, resposta_gerada')
     .order('id', { ascending: true })
-    .limit(5);
-
-  const historico = compromissos?.flatMap((item) => [
-    { role: 'user', content: item.mensagem_original },
-    { role: 'assistant', content: item.resposta_gerada }
-  ]) || [];
+    .limit(5)
 
   const mensagensParaIA = [
     {
       role: 'system',
-      content: `Você é uma secretária virtual eficiente e confiável. Sempre baseie suas respostas exclusivamente nos compromissos listados no histórico fornecido. Reproduza nomes, horários e descrições exatamente como foram registrados. Não invente informações novas e não modifique os dados salvos. Seja clara, objetiva e útil.`
+      content:
+        'Você é uma secretária virtual confiável. Responda sempre com base nos compromissos registrados no histórico. Nunca invente informações novas. Seja breve e objetiva.',
     },
-    ...historico,
-    {
-      role: 'user',
-      content: mensagem
-    }
-  ];
+    ...(historico?.flatMap((item) => [
+      { role: 'user', content: item.mensagem_original },
+      { role: 'assistant', content: item.resposta_gerada }
+    ]) || []),
+    { role: 'user', content: mensagem }
+  ]
 
   const respostaIA = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -119,25 +69,27 @@ export default async function handler(req, res) {
       temperature: 0.5,
       messages: mensagensParaIA
     })
-  });
+  })
 
-  const data = await respostaIA.json();
+  const dataIA = await respostaIA.json()
 
   if (respostaIA.status !== 200) {
-    return res.status(500).json({
-      erro: 'Erro ao consultar a OpenAI.',
-      detalhes: data
-    });
+    return res.status(500).json({ erro: 'Erro ao consultar a OpenAI.', detalhes: dataIA })
   }
 
-  const respostaTexto = data.choices[0].message.content;
+  respostaTexto = dataIA.choices[0].message.content
 
-  await supabase.from('compromissos').insert([
+  // 💾 SALVAR NO SUPABASE
+  const { error: erroInsert } = await supabase.from('compromissos').insert([
     {
       mensagem_original: mensagem,
       resposta_gerada: respostaTexto
     }
-  ]);
+  ])
 
-  return res.status(200).json({ resposta: respostaTexto });
+  if (erroInsert) {
+    return res.status(500).json({ erro: 'Erro ao salvar no Supabase.', detalhes: erroInsert })
+  }
+
+  return res.status(200).json({ resposta: respostaTexto })
 }
