@@ -6,57 +6,88 @@ const supabase = createClient(
 )
 
 export default async function handler(req, res) {
-  const { mensagem } = req.body
+  if (req.method !== 'POST') {
+    return res.status(405).json({ erro: 'Método não permitido' })
+  }
 
-  const textoMinusculo = mensagem.toLowerCase()
-  const desmarcarSinonimos = ['desmarcar', 'desmarca', 'cancelar', 'cancela', 'remover', 'remova', 'excluir', 'exclui', 'apagar', 'apaga']
-  const editarSinonimos = ['editar', 'edite', 'atualizar', 'atualize', 'modificar', 'modifica', 'muda', 'mude', 'altere', 'altera', 'troca', 'trocar']
+  let body
+  try {
+    body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body
+  } catch (e) {
+    return res.status(400).json({ erro: 'Corpo da requisição inválido' })
+  }
 
-  const contemAlgum = (lista) => lista.some((palavra) => textoMinusculo.startsWith(palavra))
-  let respostaTexto = ''
+  const { mensagem } = body
+  if (!mensagem) {
+    return res.status(400).json({ erro: 'Mensagem ausente na requisição' })
+  }
 
-  // 🗑️ DESMARCAR COMPROMISSO
-  if (contemAlgum(desmarcarSinonimos)) {
-    const termoBusca = mensagem.slice(mensagem.indexOf(' ') + 1).trim()
+  // Detecta intenção de desmarcar
+  const desmarcarSinonimos = ['desmarcar', 'desmarque', 'desmarca', 'cancelar', 'cancela', 'cancelou', 'cancele', 'remover', 'remova', 'removi', 'removi', 'excluir', 'exclui', 'delete', 'deletar']
+  const editarSinonimos = ['editar', 'edite', 'editando', 'editaram', 'mudar', 'mude', 'mudou', 'altere', 'alterar', 'trocar', 'troque', 'atualizar', 'atualize']
 
-    const { data: encontrados } = await supabase
+  const msgLower = mensagem.toLowerCase()
+
+  // Verifica se é desmarcar
+  const isDesmarcar = desmarcarSinonimos.some(palavra => msgLower.includes(palavra))
+  const isEditar = editarSinonimos.some(palavra => msgLower.includes(palavra))
+
+  if (isDesmarcar) {
+    const { error } = await supabase
       .from('compromissos')
-      .select('id, mensagem_original')
-      .ilike('mensagem_original', `%${termoBusca}%`)
-      .order('id', { ascending: false })
+      .delete()
+      .ilike('mensagem_original', `%${mensagem}%`)
 
-    if (encontrados && encontrados.length > 0) {
-      await supabase.from('compromissos').delete().eq('id', encontrados[0].id)
-      return res.status(200).json({ resposta: `O compromisso relacionado a "${termoBusca}" foi desmarcado com sucesso.` })
-    } else {
-      return res.status(200).json({ resposta: `Não encontrei nenhum compromisso com "${termoBusca}".` })
-    }
+    const respostaTexto = error
+      ? 'Não consegui desmarcar o compromisso. Deseja tentar novamente?'
+      : `Compromisso relacionado a "${mensagem}" desmarcado.`
+
+    await supabase.from('compromissos').insert([
+      {
+        mensagem_original: mensagem,
+        resposta_gerada: respostaTexto,
+      }
+    ])
+
+    return res.status(200).json({ resposta: respostaTexto })
   }
 
-  // ✏️ DETECTAR INTENÇÃO DE EDIÇÃO
-  if (contemAlgum(editarSinonimos)) {
-    return res.status(200).json({ resposta: `Entendido. Por favor, diga qual informação deseja alterar no compromisso.` })
+  if (isEditar) {
+    const { error } = await supabase
+      .from('compromissos')
+      .update({ mensagem_original: mensagem, resposta_gerada: 'Compromisso atualizado.' })
+      .ilike('mensagem_original', `%${mensagem}%`)
+
+    const respostaTexto = error
+      ? 'Não consegui editar o compromisso. Pode tentar novamente?'
+      : `Compromisso atualizado conforme instrução.`
+
+    await supabase.from('compromissos').insert([
+      {
+        mensagem_original: mensagem,
+        resposta_gerada: respostaTexto,
+      }
+    ])
+
+    return res.status(200).json({ resposta: respostaTexto })
   }
 
-  // 🧠 MEMÓRIA – CONSULTA HISTÓRICO
-  const { data: historico } = await supabase
+  // Consulta compromissos anteriores
+  const { data: compromissos } = await supabase
     .from('compromissos')
-    .select('mensagem_original, resposta_gerada')
-    .order('id', { ascending: true })
-    .limit(5)
+    .select('*')
+    .order('criado_em', { ascending: false })
+    .limit(10)
 
-  const mensagensParaIA = [
-    {
-      role: 'system',
-      content:
-        'Você é uma secretária virtual confiável. Responda sempre com base nos compromissos registrados no histórico. Nunca invente informações novas. Seja breve e objetiva.',
-    },
-    ...(historico?.flatMap((item) => [
-      { role: 'user', content: item.mensagem_original },
-      { role: 'assistant', content: item.resposta_gerada }
-    ]) || []),
-    { role: 'user', content: mensagem }
-  ]
+  const historico = compromissos.map(item => ({
+    role: 'user',
+    content: item.mensagem_original
+  }))
+
+  historico.push({
+    role: 'user',
+    content: mensagem
+  })
 
   const respostaIA = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -67,29 +98,33 @@ export default async function handler(req, res) {
     body: JSON.stringify({
       model: 'gpt-3.5-turbo',
       temperature: 0.5,
-      messages: mensagensParaIA
+      messages: [
+        {
+          role: 'system',
+          content: 'Você é uma secretária virtual. Recebe instruções em linguagem natural e responde com clareza sobre compromissos, reuniões e tarefas. Lembre-se do que foi agendado.'
+        },
+        ...historico
+      ]
     })
   })
 
-  const dataIA = await respostaIA.json()
+  const data = await respostaIA.json()
 
   if (respostaIA.status !== 200) {
-    return res.status(500).json({ erro: 'Erro ao consultar a OpenAI.', detalhes: dataIA })
+    return res.status(500).json({
+      erro: 'Erro ao processar a resposta da IA.',
+      detalhes: data,
+    })
   }
 
-  respostaTexto = dataIA.choices[0].message.content
+  const respostaTexto = data.choices[0].message.content
 
-  // 💾 SALVAR NO SUPABASE
-  const { error: erroInsert } = await supabase.from('compromissos').insert([
+  await supabase.from('compromissos').insert([
     {
       mensagem_original: mensagem,
-      resposta_gerada: respostaTexto
+      resposta_gerada: respostaTexto,
     }
   ])
 
-  if (erroInsert) {
-    return res.status(500).json({ erro: 'Erro ao salvar no Supabase.', detalhes: erroInsert })
-  }
-
-  return res.status(200).json({ resposta: respostaTexto })
+  res.status(200).json({ resposta: respostaTexto })
 }
