@@ -6,8 +6,17 @@ const supabase = createClient(
 )
 
 export default async function handler(req, res) {
+  // Cabeçalhos CORS
+  res.setHeader('Access-Control-Allow-Origin', '*')
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end()
+  }
+
   if (req.method !== 'POST') {
-    return res.status(405).json({ erro: 'Method Not Allowed' })
+    return res.status(405).json({ erro: 'Método não permitido' })
   }
 
   const { mensagem } = req.body
@@ -16,26 +25,19 @@ export default async function handler(req, res) {
     return res.status(400).json({ erro: 'Mensagem não fornecida' })
   }
 
-  // Busca compromissos existentes
+  const mensagemLower = mensagem.toLowerCase()
+
+  const sinonimosDesmarcar = ['desmarcar', 'cancele', 'cancelar', 'remover', 'remova', 'excluir', 'exclua', 'desmarca']
+  const sinonimosEditar = ['editar', 'mudar', 'modificar', 'alterar', 'trocar', 'edite', 'mude', 'modifique', 'altere', 'troque']
+
   const { data: compromissos } = await supabase
     .from('compromissos')
     .select('*')
 
-  const mensagemNormalizada = mensagem.toLowerCase()
-
-  const sinonimosDesmarcar = [
-    'desmarcar', 'cancele', 'cancelar', 'remover', 'remova', 'excluir', 'exclua', 'desmarca'
-  ]
-
-  const sinonimosEditar = [
-    'editar', 'mudar', 'modificar', 'alterar', 'trocar', 'edite', 'mude', 'modifique', 'altere', 'troque'
-  ]
-
-  // Desmarcar
   for (const palavra of sinonimosDesmarcar) {
-    if (mensagemNormalizada.includes(palavra)) {
+    if (mensagemLower.includes(palavra)) {
       for (const compromisso of compromissos) {
-        if (mensagemNormalizada.includes(compromisso.resposta_gerada.toLowerCase())) {
+        if (mensagemLower.includes(compromisso.resposta_gerada.toLowerCase())) {
           await supabase
             .from('compromissos')
             .delete()
@@ -47,11 +49,10 @@ export default async function handler(req, res) {
     }
   }
 
-  // Editar (na verdade, remove e insere nova entrada)
   for (const palavra of sinonimosEditar) {
-    if (mensagemNormalizada.includes(palavra)) {
+    if (mensagemLower.includes(palavra)) {
       for (const compromisso of compromissos) {
-        if (mensagemNormalizada.includes(compromisso.resposta_gerada.toLowerCase())) {
+        if (mensagemLower.includes(compromisso.resposta_gerada.toLowerCase())) {
           await supabase
             .from('compromissos')
             .delete()
@@ -62,13 +63,11 @@ export default async function handler(req, res) {
     }
   }
 
-  // Consulta – mostrar compromissos
-  if (mensagemNormalizada.includes('tenho compromisso') || mensagemNormalizada.includes('quais compromissos')) {
+  if (mensagemLower.includes('tenho compromisso') || mensagemLower.includes('quais compromissos')) {
     const compromissosTexto = compromissos.map(c => `- ${c.resposta_gerada}`).join('\n') || 'Você não tem compromissos marcados.'
     return res.status(200).json({ resposta: compromissosTexto })
   }
 
-  // Chamada para a OpenAI
   const respostaIA = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
