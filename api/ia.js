@@ -4,136 +4,94 @@ import OpenAI from 'openai';
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
+  process.env.SUPABASE_SERVICE_ROLE_KEY,
 );
 
 /* ---------- utilidades ---------- */
-function extrairDataHora(texto) {
-  // Aceita “2025-05-05 às 17:00”, “05/05/2025 17h” ou “05/05 às 17h”
-  const regex =
-    /(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}(?:\/\d{4})?)\D{1,10}(\d{1,2}:\d{2}|\d{1,2}h)/i;
-  const m = texto.match(regex);
+function parseDateTime(texto) {
+  const re = /(\d{4}-\d{2}-\d{2}|\d{2}\/\d{2}\/\d{4})(?:\s+(?:à|a)s?\s+(\d{1,2}[:h]\d{2}))?/ui;
+  const m = texto.match(re);
   if (!m) return null;
-
-  let [data, hora] = [m[1], m[2]];
-  // Normaliza data para YYYY-MM-DD
-  if (data.includes('/')) {
-    const [d, mes, a] = data.split('/');
-    data = `${a || new Date().getFullYear()}-${mes.padStart(2, '0')}-${d.padStart(
-      2,
-      '0'
-    )}`;
-  }
-  // Normaliza hora para HH:MM
-  if (hora.endsWith('h')) hora = hora.replace('h', ':00');
-  if (/^\d{1}:\d{2}$/.test(hora)) hora = '0' + hora;
-
-  return `${data} ${hora}`;
+  const [_, dataRaw, horaRaw] = m;
+  const [ano, mes, dia] = dataRaw.includes('-')
+    ? dataRaw.split('-')
+    : dataRaw.split('/').reverse();
+  const horaMin = (horaRaw ?? '09:00').replace('h', ':').padStart(5, '0');
+  return `${ano}-${mes}-${dia}T${horaMin}:00`;
 }
 
-async function salvarMensagem(conversa_id, papel, conteudo) {
-  await supabase
-    .from('mensagens')
-    .insert({ conversa_id, papel, conteudo })
-    .select();
+function tituloCompromisso(texto) {
+  const m = texto.match(/reuni[aã]o com ([\p{L}\s]+)/iu);
+  return m ? `Reunião com ${m[1].trim()}` : texto;
 }
+
+const verbsMarcar = ['marque', 'marcar', 'marca', 'agende', 'agendar', 'agenda'];
+const verbsCancelar = ['desmarque', 'desmarcar', 'cancele', 'cancelar', 'cancela'];
+const verbsAlterar  = ['altere', 'alterar', 'mude', 'muda', 'editar', 'edite', 'troque', 'troca'];
 
 /* ---------- handler ---------- */
 export default async function handler(req, res) {
-  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST')
-    return res.status(405).json({ erro: 'Método não permitido' });
+  if (req.method !== 'POST')  return res.status(405).json({ erro: 'Método não permitido' });
 
-  const { mensagem, conversa_id = 'default' } = req.body || {};
+  const { mensagem } = req.body ?? {};
   if (!mensagem) return res.status(400).json({ erro: 'Mensagem não fornecida' });
 
-  try {
-    /* 1. salva mensagem do usuário  */
-    await salvarMensagem(conversa_id, 'user', mensagem);
+  const txt = mensagem.toLowerCase();
 
-    /* 2. busca último histórico (máx 15)  */
-    const { data: historico } = await supabase
-      .from('mensagens')
-      .select('papel, conteudo')
-      .eq('conversa_id', conversa_id)
-      .order('criado_em', { ascending: true })
-      .limit(15);
-
-    const contexto = historico.map((m) => ({
-      role: m.papel,
-      content: m.conteudo,
-    }));
-
-    /* 3. pega lista de compromissos marcados  */
-    const { data: compromissos } = await supabase
-      .from('appointments')
-      .select('*')
-      .eq('status', 'marcado')
-      .order('data_hora', { ascending: true });
-
-    const lista =
-      compromissos.length === 0
-        ? 'Nenhum compromisso marcado.'
-        : compromissos
-            .map(
-              (c) =>
-                `• ${c.titulo} @ ${new Date(c.data_hora).toLocaleString('pt-BR')}`
-            )
-            .join('\n');
-
-    contexto.unshift({
-      role: 'system',
-      content:
-        'Você é uma secretária virtual. Utilize a lista de compromissos abaixo para responder com máxima precisão. ' +
-        'Quando marcar um novo compromisso, use a frase “Compromisso «Título» marcado para DD/MM/YYYY HH:MM.” ' +
-        'Quando desmarcar, use “Compromisso «Título» cancelado”. Quando alterar, use “Compromisso «Título» alterado para …”.',
+  /* ----------- MARCAR ----------- */
+  if (verbsMarcar.some(v => txt.includes(v))) {
+    const dateISO = parseDateTime(txt);
+    await supabase.from('appointments').insert({
+      titulo: tituloCompromisso(txt),
+      data_hora: dateISO,
+      status: 'marcado',
     });
-    contexto.unshift({ role: 'system', content: `Lista atual de compromissos:\n${lista}` });
-
-    /* 4. envia à OpenAI (modelo atualizado)  */
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
-      temperature: 0.4,
-      messages: contexto,
-    });
-    const resposta = completion.choices[0].message.content.trim();
-
-    /* 5. grava resposta da IA  */
-    await salvarMensagem(conversa_id, 'assistant', resposta);
-
-    /* 6. tentativa de interpretar manualmente (fallback) -------- */
-    // Caso a OpenAI ainda não tenha feito, tentamos parsear e gravar
-    if (/marque/i.test(mensagem)) {
-      const dh = extrairDataHora(mensagem);
-      if (dh) {
-        await supabase.from('appointments').insert({
-          titulo: mensagem.replace(/marque/i, '').trim(),
-          data_hora: dh,
-          status: 'marcado',
-        });
-      }
-    } else if (/(desmarc|cancel)/i.test(mensagem)) {
-      await supabase
-        .from('appointments')
-        .update({ status: 'cancelado' })
-        .like('titulo', `%${mensagem.split('com')[1] || ''}%`);
-    } else if (/(alter|muda)/i.test(mensagem)) {
-      const dh = extrairDataHora(mensagem);
-      if (dh) {
-        await supabase
-          .from('appointments')
-          .update({ data_hora: dh })
-          .like('titulo', `%${mensagem.split('com')[1] || ''}%`);
-      }
-    }
-
-    return res.status(200).json({ resposta });
-  } catch (e) {
-    console.error(e);
-    return res.status(500).json({ erro: 'Falha interna', detalhes: e.message });
+    const resp = dateISO
+      ? `Compromisso "${tituloCompromisso(txt)}" marcado para ${new Date(dateISO).toLocaleString('pt-BR')}.`
+      : `Compromisso "${tituloCompromisso(txt)}" criado (data/hora indefinidas).`;
+    return res.json({ resposta: resp });
   }
+
+  /* ----------- CANCELAR ----------- */
+  if (verbsCancelar.some(v => txt.includes(v))) {
+    const nome = tituloCompromisso(txt);
+    await supabase
+      .from('appointments')
+      .update({ status: 'cancelado' })
+      .eq('titulo', nome);
+    return res.json({ resposta: `Compromisso "${nome}" cancelado.` });
+  }
+
+  /* ----------- ALTERAR ----------- */
+  if (verbsAlterar.some(v => txt.includes(v))) {
+    const nome = tituloCompromisso(txt);
+    const dateISO = parseDateTime(txt);
+    if (!dateISO) {
+      return res.json({ resposta: 'Por favor informe nova data/hora.' });
+    }
+    await supabase
+      .from('appointments')
+      .update({ data_hora: dateISO, status: 'remarcado' })
+      .eq('titulo', nome);
+    return res.json({ resposta: `Compromisso "${nome}" remarcado para ${new Date(dateISO).toLocaleString('pt-BR')}.` });
+  }
+
+  /* ----------- LISTAR ----------- */
+  const { data: rows } = await supabase
+    .from('appointments')
+    .select('*')
+    .eq('status', 'marcado')
+    .order('data_hora');
+
+  if (!rows.length) return res.json({ resposta: 'Você não tem compromissos marcados.' });
+
+  const lista = rows.map(r =>
+    `• ${r.titulo} @ ${new Date(r.data_hora).toLocaleString('pt-BR')}`
+  ).join('\n');
+
+  return res.json({ resposta: `Lista de compromissos:\n${lista}` });
 }
