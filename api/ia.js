@@ -6,7 +6,6 @@ const supabase = createClient(
 );
 
 export default async function handler(req, res) {
-  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -20,37 +19,6 @@ export default async function handler(req, res) {
   try {
     await supabase.from('mensagens').insert({ conversa_id, papel: 'user', conteudo: mensagem });
 
-    const mensagemLower = mensagem.toLowerCase();
-    const sinonimosDesmarcar = ['desmarcar', 'cancele', 'cancelar', 'remover', 'remova', 'excluir', 'exclua', 'desmarca'];
-    const sinonimosEditar = ['editar', 'mudar', 'modificar', 'alterar', 'trocar', 'edite', 'mude', 'modifique', 'altere', 'troque'];
-    const sinonimosMarcar = ['marcar', 'agendar', 'agende', 'marque', 'reserve'];
-
-    const { data: compromissos } = await supabase.from('compromissos').select('*').order('id', { ascending: true });
-
-    for (const palavra of sinonimosDesmarcar) {
-      if (mensagemLower.includes(palavra)) {
-        for (const compromisso of compromissos) {
-          if (mensagemLower.includes(compromisso.nome?.toLowerCase())) {
-            await supabase.from('compromissos').delete().eq('id', compromisso.id);
-            const resposta = `O compromisso com ${compromisso.nome} foi desmarcado com sucesso.`;
-            await supabase.from('mensagens').insert({ conversa_id, papel: 'assistant', conteudo: resposta });
-            return res.status(200).json({ resposta });
-          }
-        }
-      }
-    }
-
-    for (const palavra of sinonimosEditar) {
-      if (mensagemLower.includes(palavra)) {
-        for (const compromisso of compromissos) {
-          if (mensagemLower.includes(compromisso.nome?.toLowerCase())) {
-            await supabase.from('compromissos').delete().eq('id', compromisso.id);
-            break;
-          }
-        }
-      }
-    }
-
     const { data: historico } = await supabase
       .from('mensagens')
       .select('papel, conteudo')
@@ -58,20 +26,21 @@ export default async function handler(req, res) {
       .order('criado_em', { ascending: true })
       .limit(10);
 
-    const mensagensContexto = historico.map((msg) => ({ role: msg.papel, content: msg.conteudo }));
+    const contexto = historico.map((msg) => ({ role: msg.papel, content: msg.conteudo }));
 
-    const promptSistema = {
+    contexto.unshift({
       role: 'system',
-      content: 'Você é uma secretária virtual. Sua função é marcar, desmarcar e alterar compromissos reais do usuário. Seja clara e objetiva. Com base na instrução do usuário, você responderá apenas o necessário.'
-    };
+      content: 'Você é uma secretária virtual. Sua função é marcar, desmarcar e alterar compromissos reais do usuário com base em um banco de dados. Responda com clareza, não invente dados, e confirme apenas compromissos reais.'
+    });
 
-    const listaCompromissos = compromissos.map((c) => `• ${c.nome} - ${c.data} às ${c.hora}`).join('\n') || 'Nenhum compromisso marcado.';
+    const { data: compromissos } = await supabase.from('appointments').select('*').order('created_at', { ascending: true });
+    const lista = compromissos.map(c => `• ${c.titulo} em ${new Date(c.data_hora).toLocaleString('pt-BR')}`).join('\n') || 'Nenhum compromisso encontrado.';
 
-    const contexto = [
-      promptSistema,
-      { role: 'system', content: `Compromissos atuais:\n${listaCompromissos}` },
-      ...mensagensContexto
-    ];
+    contexto.unshift({
+      role: 'system',
+      content: `Agenda atual:
+${lista}`
+    });
 
     const respostaIA = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -82,8 +51,8 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         model: 'gpt-3.5-turbo',
         temperature: 0.5,
-        messages: contexto,
-      }),
+        messages: contexto
+      })
     });
 
     const data = await respostaIA.json();
@@ -94,19 +63,33 @@ export default async function handler(req, res) {
     const respostaTexto = data.choices[0].message.content;
     await supabase.from('mensagens').insert({ conversa_id, papel: 'assistant', conteudo: respostaTexto });
 
-    for (const palavra of sinonimosMarcar) {
-      if (mensagemLower.includes(palavra)) {
-        const nomeExtraido = mensagem.match(/com\s(\w+)/i)?.[1] || 'compromisso';
-        const horaExtraida = mensagem.match(/(\d{1,2}h)/i)?.[1] || '00h';
-        const dataExtraida = mensagem.match(/amanhã|segunda|terça|quarta|quinta|sexta|sábado|domingo|hoje/i)?.[0] || 'indefinida';
+    const msg = mensagem.toLowerCase();
 
-        await supabase.from('compromissos').insert({
-          nome: nomeExtraido,
-          data: dataExtraida,
-          hora: horaExtraida,
-          descricao: respostaTexto
-        });
-        break;
+    // Inserção
+    if (msg.includes('marque') || msg.includes('agende') || msg.includes('marcar')) {
+      const titulo = mensagem;
+      const data_hora = new Date(); // Placeholder para melhoria futura
+      await supabase.from('appointments').insert({ titulo, data_hora });
+    }
+
+    // Desmarcar
+    if (msg.includes('desmarque') || msg.includes('desmarcar') || msg.includes('cancele') || msg.includes('remova')) {
+      const termos = ['desmarque', 'desmarcar', 'cancele', 'remova'];
+      const termoEncontrado = termos.find(t => msg.includes(t));
+      if (termoEncontrado) {
+        const palavras = mensagem.split(' ');
+        const nome = palavras.find(p => /^[A-ZÁÉÍÓÚ][a-záéíóú]+$/.test(p)) || '';
+        await supabase.from('appointments').delete().ilike('titulo', `%${nome}%`);
+      }
+    }
+
+    // Alterar horário
+    if (msg.includes('altere') || msg.includes('mude') || msg.includes('editar') || msg.includes('edite') || msg.includes('modifique')) {
+      const nome = mensagem.match(/com\s+(\w+)/i)?.[1];
+      const novaHora = mensagem.match(/para\s+(\d{1,2}h)/i)?.[1];
+      if (nome && novaHora) {
+        const novoTimestamp = new Date(); // Placeholder
+        await supabase.from('appointments').update({ data_hora: novoTimestamp }).ilike('titulo', `%${nome}%`);
       }
     }
 
