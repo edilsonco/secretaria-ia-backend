@@ -1,97 +1,112 @@
 import { createClient } from '@supabase/supabase-js';
 import OpenAI from 'openai';
-
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai  = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-/* ---------- utilidades ---------- */
+/* ---------- Utilidades ---------- */
 function parseDateTime(texto) {
-  const re = /(\d{4}-\d{2}-\d{2}|\d{2}\/\d{2}\/\d{4})(?:\s+(?:à|a)s?\s+(\d{1,2}[:h]\d{2}))?/ui;
-  const m = texto.match(re);
-  if (!m) return null;
-  const [_, dataRaw, horaRaw] = m;
-  const [ano, mes, dia] = dataRaw.includes('-')
-    ? dataRaw.split('-')
-    : dataRaw.split('/').reverse();
-  const horaMin = (horaRaw ?? '09:00').replace('h', ':').padStart(5, '0');
-  return `${ano}-${mes}-${dia}T${horaMin}:00`;
+  // Data opcional + hora obrigatória
+  // Exemplos válidos: 05/05/2025 18h | 2025-05-05 às 18:00 | 18h | 18:30
+  const dataRE = /(\d{4}-\d{2}-\d{2}|\d{2}\/\d{2}\/\d{4})/;
+  const horaRE = /(\d{1,2})(?::|h)?(\d{2})?/;
+  const dataM = texto.match(dataRE);
+  const horaM = texto.match(horaRE);
+
+  if (!horaM) return null;                     // precisamos de hora
+
+  const [ , hh, mmRaw ] = horaM;
+  const mm = mmRaw ?? '00';
+  const horaISO = `${hh.padStart(2,'0')}:${mm.padEnd(2,'0')}:00`;
+
+  let iso;
+  if (dataM) {
+    const d = dataM[1];
+    const [ano, mes, dia] = d.includes('-') ? d.split('-') : d.split('/').reverse();
+    iso = `${ano}-${mes}-${dia}T${horaISO}`;
+  } else {
+    // sem data -> hoje
+    const hoje = new Date().toISOString().slice(0,10);
+    iso = `${hoje}T${horaISO}`;
+  }
+  return iso;
 }
 
-function tituloCompromisso(texto) {
-  const m = texto.match(/reuni[aã]o com ([\p{L}\s]+)/iu);
-  return m ? `Reunião com ${m[1].trim()}` : texto;
+function pessoaDoTexto(txt) {
+  const m = txt.match(/com ([\p{L}\s]+)/iu);
+  return m ? m[1].trim() : null;
 }
 
-const verbsMarcar = ['marque', 'marcar', 'marca', 'agende', 'agendar', 'agenda'];
-const verbsCancelar = ['desmarque', 'desmarcar', 'cancele', 'cancelar', 'cancela'];
-const verbsAlterar  = ['altere', 'alterar', 'mude', 'muda', 'editar', 'edite', 'troque', 'troca'];
+function tituloCompromisso(txt) {
+  const nome = pessoaDoTexto(txt) ?? 'Contato';
+  return `Reunião com ${nome}`;
+}
 
-/* ---------- handler ---------- */
-export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST')  return res.status(405).json({ erro: 'Método não permitido' });
+/* ---------- Verbos ---------- */
+const verbsMarcar  = ['marque','marcar','marca','agende','agendar','agenda'];
+const verbsCancelar= ['desmarque','desmarcar','cancele','cancelar','cancela'];
+const verbsAlterar = ['altere','alterar','mude','muda','editar','edite','troque','troca'];
 
+export default async function handler(req,res){
+  res.setHeader('Access-Control-Allow-Origin','*');
+  res.setHeader('Access-Control-Allow-Methods','POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers','Content-Type');
+  if (req.method==='OPTIONS') return res.status(200).end();
+  if (req.method!=='POST')     return res.status(405).json({erro:'Método não permitido'});
   const { mensagem } = req.body ?? {};
-  if (!mensagem) return res.status(400).json({ erro: 'Mensagem não fornecida' });
+  if (!mensagem) return res.status(400).json({erro:'Mensagem não fornecida'});
 
   const txt = mensagem.toLowerCase();
 
-  /* ----------- MARCAR ----------- */
-  if (verbsMarcar.some(v => txt.includes(v))) {
-    const dateISO = parseDateTime(txt);
+  /* ----- MARCAR ----- */
+  if (verbsMarcar.some(v=>txt.includes(v))){
+    const dataISO = parseDateTime(txt);
+    const nome    = tituloCompromisso(txt);
     await supabase.from('appointments').insert({
-      titulo: tituloCompromisso(txt),
-      data_hora: dateISO,
-      status: 'marcado',
+      titulo: nome,
+      data_hora: dataISO,
+      status: 'marcado'
     });
-    const resp = dateISO
-      ? `Compromisso "${tituloCompromisso(txt)}" marcado para ${new Date(dateISO).toLocaleString('pt-BR')}.`
-      : `Compromisso "${tituloCompromisso(txt)}" criado (data/hora indefinidas).`;
-    return res.json({ resposta: resp });
+    return res.json({resposta:`Compromisso "${nome}" marcado para ${new Date(dataISO).toLocaleString('pt-BR')}.`});
   }
 
-  /* ----------- CANCELAR ----------- */
-  if (verbsCancelar.some(v => txt.includes(v))) {
-    const nome = tituloCompromisso(txt);
+  /* ----- CANCELAR ----- */
+  if (verbsCancelar.some(v=>txt.includes(v))){
+    const pessoa = pessoaDoTexto(txt);
+    if (!pessoa) return res.json({resposta:'Não consegui identificar qual compromisso cancelar.'});
     await supabase
       .from('appointments')
-      .update({ status: 'cancelado' })
-      .eq('titulo', nome);
-    return res.json({ resposta: `Compromisso "${nome}" cancelado.` });
+      .update({status:'cancelado'})
+      .ilike('titulo', `%${pessoa}%`);
+    return res.json({resposta:`Compromisso relacionado a ${pessoa} cancelado.`});
   }
 
-  /* ----------- ALTERAR ----------- */
-  if (verbsAlterar.some(v => txt.includes(v))) {
-    const nome = tituloCompromisso(txt);
-    const dateISO = parseDateTime(txt);
-    if (!dateISO) {
-      return res.json({ resposta: 'Por favor informe nova data/hora.' });
-    }
+  /* ----- ALTERAR ----- */
+  if (verbsAlterar.some(v=>txt.includes(v))){
+    const pessoa = pessoaDoTexto(txt);
+    const novaISO = parseDateTime(txt);
+    if (!pessoa || !novaISO)
+      return res.json({resposta:'Informe quem e nova data/hora.'});
+
     await supabase
       .from('appointments')
-      .update({ data_hora: dateISO, status: 'remarcado' })
-      .eq('titulo', nome);
-    return res.json({ resposta: `Compromisso "${nome}" remarcado para ${new Date(dateISO).toLocaleString('pt-BR')}.` });
+      .update({data_hora:novaISO, status:'remarcado'})
+      .ilike('titulo', `%${pessoa}%`);
+
+    return res.json({resposta:`Compromisso com ${pessoa} remarcado para ${new Date(novaISO).toLocaleString('pt-BR')}.`});
   }
 
-  /* ----------- LISTAR ----------- */
+  /* ----- LISTAR ----- */
   const { data: rows } = await supabase
     .from('appointments')
     .select('*')
-    .eq('status', 'marcado')
+    .eq('status','marcado')
     .order('data_hora');
 
-  if (!rows.length) return res.json({ resposta: 'Você não tem compromissos marcados.' });
+  if (!rows.length) return res.json({resposta:'Você não tem compromissos marcados.'});
 
-  const lista = rows.map(r =>
-    `• ${r.titulo} @ ${new Date(r.data_hora).toLocaleString('pt-BR')}`
-  ).join('\n');
-
-  return res.json({ resposta: `Lista de compromissos:\n${lista}` });
+  const lista = rows.map(r=>`• ${r.titulo} @ ${new Date(r.data_hora).toLocaleString('pt-BR')}`).join('\n');
+  return res.json({resposta:`Lista atual de compromissos:\n${lista}`});
 }
