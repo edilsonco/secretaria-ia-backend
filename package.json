@@ -4,7 +4,7 @@
   "type": "module",
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",
-    "openai": "^4.25.0"
+    "openai": "^4.25.0",
+    "dayjs": "^1.11.10"
   }
 }
-
