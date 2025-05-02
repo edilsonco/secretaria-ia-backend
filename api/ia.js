@@ -27,7 +27,6 @@ export default async function handler(req, res) {
 
     const { data: compromissos } = await supabase.from('compromissos').select('*').order('id', { ascending: true });
 
-    // DESMARCAR
     for (const palavra of sinonimosDesmarcar) {
       if (mensagemLower.includes(palavra)) {
         for (const compromisso of compromissos) {
@@ -41,7 +40,6 @@ export default async function handler(req, res) {
       }
     }
 
-    // ALTERAR (remove compromisso antigo)
     for (const palavra of sinonimosEditar) {
       if (mensagemLower.includes(palavra)) {
         for (const compromisso of compromissos) {
@@ -53,7 +51,6 @@ export default async function handler(req, res) {
       }
     }
 
-    // HISTÓRICO para IA
     const { data: historico } = await supabase
       .from('mensagens')
       .select('papel, conteudo')
@@ -61,19 +58,20 @@ export default async function handler(req, res) {
       .order('criado_em', { ascending: true })
       .limit(10);
 
-    const contexto = historico.map((msg) => ({ role: msg.papel, content: msg.conteudo }));
+    const mensagensContexto = historico.map((msg) => ({ role: msg.papel, content: msg.conteudo }));
 
-    contexto.unshift({
+    const promptSistema = {
       role: 'system',
-      content:
-        'Você é uma secretária virtual. Sua função é marcar, desmarcar e alterar compromissos reais do usuário. Seja clara e objetiva. Com base na instrução do usuário, você responderá apenas o necessário.',
-    });
+      content: 'Você é uma secretária virtual. Sua função é marcar, desmarcar e alterar compromissos reais do usuário. Seja clara e objetiva. Com base na instrução do usuário, você responderá apenas o necessário.'
+    };
 
     const listaCompromissos = compromissos.map((c) => `• ${c.nome} - ${c.data} às ${c.hora}`).join('\n') || 'Nenhum compromisso marcado.';
-    contexto.unshift({
-      role: 'system',
-      content: `Compromissos atuais:\n${listaCompromissos}`,
-    });
+
+    const contexto = [
+      promptSistema,
+      { role: 'system', content: `Compromissos atuais:\n${listaCompromissos}` },
+      ...mensagensContexto
+    ];
 
     const respostaIA = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -96,7 +94,6 @@ export default async function handler(req, res) {
     const respostaTexto = data.choices[0].message.content;
     await supabase.from('mensagens').insert({ conversa_id, papel: 'assistant', conteudo: respostaTexto });
 
-    // MARCAR
     for (const palavra of sinonimosMarcar) {
       if (mensagemLower.includes(palavra)) {
         const nomeExtraido = mensagem.match(/com\s(\w+)/i)?.[1] || 'compromisso';
@@ -109,7 +106,6 @@ export default async function handler(req, res) {
           hora: horaExtraida,
           descricao: respostaTexto
         });
-
         break;
       }
     }
