@@ -1,117 +1,129 @@
-/* api/ia.js — secretaria-ia-backend  */
-/* eslint-disable no-console */
-import OpenAI from 'openai';
 import { createClient } from '@supabase/supabase-js';
+import OpenAI from 'openai';
 
-/* --- 1.  SDKs ------------------------------------------------------------ */
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,            // variável já criada na Vercel
-});
+/* ---------- 1. clientes ---------- */
 const supabase = createClient(
-  process.env.SUPABASE_URL,                      // variável já criada na Vercel
-  process.env.SUPABASE_SERVICE_ROLE_KEY          // variável já criada na Vercel
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-/* --- 2.  Utilidades simples --------------------------------------------- */
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
 
-/* Expressões para detectar rapidamente o que o usuário quer                      */
-const criarRegex   = /\b(marcar?|marque|agendar?|agende|agenda|reserve?)\b.*\b(reuni[aã]o|encontro|call|compromisso)\b/i;
-const cancelarRegex = /\b(desmarcar?|cancela[rs]?|remover?|excluir?)\b.*\b(reuni[aã]o|compromisso)\b/i;
-const alterarRegex  = /\b(alt[ea]r?|muda[rs]?|edi[tc]?)\b.*\b(reuni[aã]o|compromisso)\b/i;
-
-/* Extrai data e hora em  2025-05-05 14:00  ou  05/05/2025 14h  */
-function extrairDataHora(texto) {
-  const m =
-    texto.match(/(\d{4}-\d{2}-\d{2})\s*(?:às|as)?\s*(\d{2})(?::(\d{2}))?/) ||
-    texto.match(/(\d{2}\/\d{2}\/\d{4})\s*(?:às|as)?\s*(\d{2})(?::(\d{2}))?/);
-  if (!m) return null;
-  const [dia, mes, ano] = m[1].includes('-')
-    ? m[1].split('-').map(Number)          // YYYY-MM-DD
-    : m[1].split('/').reverse().map(Number); // DD/MM/YYYY
-  const hora = Number(m[2]);
-  const minuto = m[3] ? Number(m[3]) : 0;
-  return new Date(ano, mes - 1, dia, hora, minuto).toISOString();
-}
-
-/* --- 3.  Handler --------------------------------------------------------- */
+/* ---------- 2. handler ---------- */
 export default async function handler(req, res) {
-  /* CORS simplificado */
+  /* CORS */
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST')    return res.status(405).json({ erro: 'Método não permitido' });
+  if (req.method !== 'POST') return res.status(405).json({ erro: 'Método não permitido' });
 
-  const { mensagem } = req.body || {};
-  if (!mensagem) return res.status(400).json({ erro: 'Campo "mensagem" obrigatório' });
+  /* ---------- 2.1 validar corpo ---------- */
+  const { mensagem, conversa_id = 'default' } = req.body || {};
+  if (!mensagem) return res.status(400).json({ erro: 'Mensagem não fornecida' });
 
-  /* --- 3.1  Agenda atual (string) --------------------------------------- */
-  const { data: ag } = await supabase.from('appointments').select('*').eq('status', 'marcado').order('data_hora');
-  const lista = (ag ?? []).map((c) => `• ${c.titulo} em ${new Date(c.data_hora).toLocaleString('pt-BR')}`).join('\n') || 'Nenhum compromisso.';
+  try {
+    /* ---------- 3. gravar mensagem do usuário ---------- */
+    await supabase.from('mensagens').insert({
+      conversa_id,
+      papel: 'user',
+      conteudo: mensagem
+    });
 
-  /* --- 3.2  Monta mensagens para o modelo ------------------------------- */
-  const mensagens = [
-    {
+    /* ---------- 4. obter histórico ---------- */
+    const { data: hist } = await supabase
+      .from('mensagens')
+      .select('papel,conteudo')
+      .eq('conversa_id', conversa_id)
+      .order('criado_em', { ascending: true })
+      .limit(12);
+
+    const contexto = hist.map(m => ({ role: m.papel, content: m.conteudo }));
+
+    /* ---------- 5. snapshot de compromissos ---------- */
+    const { data: compromissos } = await supabase
+      .from('appointments')
+      .select('*')
+      .eq('status', 'marcado')
+      .order('data_hora', { ascending: true });
+
+    const lista = compromissos.length
+      ? compromissos.map(c => `• ${c.titulo} @ ${new Date(c.data_hora).toLocaleString('pt-BR')}`).join('\n')
+      : 'Nenhum compromisso marcado.';
+
+    contexto.unshift({
       role: 'system',
-      content: `Você é uma secretária virtual. Seja objetiva. 
-Agenda do usuário agora:\n${lista}`,
-    },
-    { role: 'user', content: mensagem },
-  ];
+      content: `Lista atual de compromissos do usuário:\n${lista}`
+    });
 
-  /* --- 3.3  Especificamos a função que o GPT pode chamar ---------------- */
-  const fnCriar = {
-    name: 'criar_compromisso',
-    description: 'Cria um compromisso real na agenda do usuário',
-    parameters: {
-      type: 'object',
-      properties: {
-        titulo: { type: 'string', description: 'Descrição curta' },
-        data_hora: { type: 'string', description: 'Data/hora em ISO-8601' },
-      },
-      required: ['titulo', 'data_hora'],
-    },
-  };
+    contexto.unshift({
+      role: 'system',
+      content:
+        'Você é uma secretária virtual. Marque, desmarque ou altere compromissos no banco. ' +
+        'Responda apenas o necessário. Se algo não existir, informe. Formato PT-BR.'
+    });
 
-  /* --- 3.4  Envia para OpenAI ------------------------------------------ */
-  const resposta = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',                 // usa modelo atual
-    temperature: 0.4,
-    messages: mensagens,
-    functions: [fnCriar],
-    function_call: 'auto',                // deixa o modelo decidir
-  });
+    /* ---------- 6. enviar para OpenAI ---------- */
+    const respIA = await openai.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      temperature: 0.3,
+      messages: contexto
+    });
 
-  const escolha = resposta.choices[0];
+    const resposta = respIA.choices[0].message.content.trim();
 
-  /* --- 3.5  Se o modelo pediu para EXECUTAR a função -------------------- */
-  if (escolha.finish_reason === 'function_call' && escolha.message.function_call) {
-    const { name, arguments: argsJSON } = escolha.message.function_call;
-    if (name === 'criar_compromisso') {
-      /* Parseia JSON seguro                          */
-      let args;
-      try { args = JSON.parse(argsJSON); } catch { args = {}; }
+    /* ---------- 7. salvar resposta ---------- */
+    await supabase.from('mensagens').insert({
+      conversa_id,
+      papel: 'assistant',
+      conteudo: resposta
+    });
 
-      /* Se o modelo não extraiu, tenta regex manual */
-      if (!args.titulo)     args.titulo = mensagem;
-      if (!args.data_hora)  args.data_hora = extrairDataHora(mensagem);
+    /* ---------- 8. regex simples p/ AÇÃO ---------- */
+    const regexMarcar   = /marcado para (\d{2}\/\d{2}\/\d{4})[ ,]+(\d{2}:\d{2})/i;
+    const regexDesmar   = /compromisso .*? (?:removido|desmarcado)/i;
+    const regexAlterado = /alterado.*?para (\d{2}\/\d{2}\/\d{4})[ ,]+(\d{2}:\d{2})/i;
 
-      if (!args.data_hora) {
-        return res.status(400).json({ resposta: 'Desculpe, não consegui entender a data/hora.' });
-      }
-
-      /* Insere no Supabase                                       */
+    if (regexMarcar.test(resposta)) {
+      const [, d, h] = resposta.match(regexMarcar);
       await supabase.from('appointments').insert({
-        titulo: args.titulo,
-        data_hora: args.data_hora,
-        status: 'marcado',
+        titulo: resposta.split('"')[1] || 'compromisso',
+        data_hora: `${d.split('/').reverse().join('-')}T${h}:00`,
+        status: 'marcado'
       });
-
-      const textoOk = `Compromisso "${args.titulo}" marcado para ${new Date(args.data_hora).toLocaleString('pt-BR')}.`;
-      return res.status(200).json({ resposta: textoOk });
+    } else if (regexDesmar.test(resposta)) {
+      /* seta status = cancelado no mais recente */
+      const { data: ult } = await supabase
+        .from('appointments')
+        .select('id')
+        .eq('status', 'marcado')
+        .order('created_at', { ascending: false })
+        .limit(1);
+      if (ult[0]) {
+        await supabase.from('appointments')
+          .update({ status: 'cancelado' })
+          .eq('id', ult[0].id);
+      }
+    } else if (regexAlterado.test(resposta)) {
+      const [, d, h] = resposta.match(regexAlterado);
+      const { data: ult } = await supabase
+        .from('appointments')
+        .select('id')
+        .eq('status', 'marcado')
+        .order('created_at', { ascending: false })
+        .limit(1);
+      if (ult[0]) {
+        await supabase.from('appointments')
+          .update({ data_hora: `${d.split('/').reverse().join('-')}T${h}:00` })
+          .eq('id', ult[0].id);
+      }
     }
-  }
 
-  /* --- 3.6  Caso comum: só devolver o texto da IA ---------------------- */
-  return res.status(200).json({ resposta: escolha.message.content });
+    return res.status(200).json({ resposta });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ erro: 'Falha interna', detalhes: err.message });
+  }
 }
