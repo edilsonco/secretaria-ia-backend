@@ -18,10 +18,43 @@ export default async function handler(req, res) {
   if (!mensagem) return res.status(400).json({ erro: 'Mensagem não fornecida' });
 
   try {
-    // 1. Salvar mensagem do usuário na memória
+    // Salvar mensagem do usuário na memória
     await supabase.from('mensagens').insert({ conversa_id, papel: 'user', conteudo: mensagem });
 
-    // 2. Buscar mensagens anteriores (últimas 10)
+    const mensagemLower = mensagem.toLowerCase();
+    const sinonimosDesmarcar = ['desmarcar', 'cancele', 'cancelar', 'remover', 'remova', 'excluir', 'exclua', 'desmarca'];
+    const sinonimosEditar = ['editar', 'mudar', 'modificar', 'alterar', 'trocar', 'edite', 'mude', 'modifique', 'altere', 'troque'];
+    const sinonimosMarcar = ['marcar', 'agendar', 'agende', 'marque', 'reserve'];
+
+    const { data: compromissos } = await supabase.from('compromissos').select('*').order('id', { ascending: true });
+
+    // DESMARCAR
+    for (const palavra of sinonimosDesmarcar) {
+      if (mensagemLower.includes(palavra)) {
+        for (const compromisso of compromissos) {
+          if (mensagemLower.includes(compromisso.resposta_gerada.toLowerCase())) {
+            await supabase.from('compromissos').delete().eq('id', compromisso.id);
+            const resposta = `O compromisso foi desmarcado com sucesso.`;
+            await supabase.from('mensagens').insert({ conversa_id, papel: 'assistant', conteudo: resposta });
+            return res.status(200).json({ resposta });
+          }
+        }
+      }
+    }
+
+    // ALTERAR (remove o compromisso antigo)
+    for (const palavra of sinonimosEditar) {
+      if (mensagemLower.includes(palavra)) {
+        for (const compromisso of compromissos) {
+          if (mensagemLower.includes(compromisso.resposta_gerada.toLowerCase())) {
+            await supabase.from('compromissos').delete().eq('id', compromisso.id);
+            break;
+          }
+        }
+      }
+    }
+
+    // HISTÓRICO para contexto da IA
     const { data: historico } = await supabase
       .from('mensagens')
       .select('papel, conteudo')
@@ -31,23 +64,21 @@ export default async function handler(req, res) {
 
     const contexto = historico.map((msg) => ({ role: msg.papel, content: msg.conteudo }));
 
-    // 3. Incluir prompt de sistema
+    // Prompt de sistema
     contexto.unshift({
       role: 'system',
       content:
         'Você é uma secretária virtual. Sua função é ajudar a marcar, alterar e desmarcar compromissos reais do usuário, que ficam armazenados em um banco de dados. Seja clara, objetiva e só fale o que tiver certeza com base na memória. Se não souber, diga que não sabe.',
     });
 
-    // 4. Consulta atual de compromissos salvos
-    const { data: compromissos } = await supabase.from('compromissos').select('*').order('id', { ascending: true });
+    // Lista atual de compromissos
     const listaCompromissos = compromissos.map((c) => `• ${c.resposta_gerada}`).join('\n') || 'Nenhum compromisso marcado.';
-
     contexto.unshift({
       role: 'system',
       content: `Lista atual de compromissos do usuário:\n${listaCompromissos}`,
     });
 
-    // 5. Enviar mensagem para OpenAI
+    // Chamada OpenAI
     const respostaIA = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -68,12 +99,15 @@ export default async function handler(req, res) {
 
     const respostaTexto = data.choices[0].message.content;
 
-    // 6. Salvar resposta da IA na memória
+    // Salvar resposta da IA
     await supabase.from('mensagens').insert({ conversa_id, papel: 'assistant', conteudo: respostaTexto });
 
-    // 7. Salvar no banco se a IA disser que marcou compromisso
-    if (respostaTexto.toLowerCase().includes('marquei') || respostaTexto.toLowerCase().includes('agendei')) {
-      await supabase.from('compromissos').insert({ mensagem_original: mensagem, resposta_gerada: respostaTexto });
+    // MARCAR compromisso
+    for (const palavra of sinonimosMarcar) {
+      if (mensagemLower.includes(palavra)) {
+        await supabase.from('compromissos').insert({ mensagem_original: mensagem, resposta_gerada: respostaTexto });
+        break;
+      }
     }
 
     res.status(200).json({ resposta: respostaTexto });
