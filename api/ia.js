@@ -18,7 +18,6 @@ export default async function handler(req, res) {
   if (!mensagem) return res.status(400).json({ erro: 'Mensagem não fornecida' });
 
   try {
-    // Salvar mensagem do usuário na memória
     await supabase.from('mensagens').insert({ conversa_id, papel: 'user', conteudo: mensagem });
 
     const mensagemLower = mensagem.toLowerCase();
@@ -32,9 +31,9 @@ export default async function handler(req, res) {
     for (const palavra of sinonimosDesmarcar) {
       if (mensagemLower.includes(palavra)) {
         for (const compromisso of compromissos) {
-          if (mensagemLower.includes(compromisso.resposta_gerada.toLowerCase())) {
+          if (mensagemLower.includes(compromisso.nome?.toLowerCase())) {
             await supabase.from('compromissos').delete().eq('id', compromisso.id);
-            const resposta = `O compromisso foi desmarcado com sucesso.`;
+            const resposta = `O compromisso com ${compromisso.nome} foi desmarcado com sucesso.`;
             await supabase.from('mensagens').insert({ conversa_id, papel: 'assistant', conteudo: resposta });
             return res.status(200).json({ resposta });
           }
@@ -42,11 +41,11 @@ export default async function handler(req, res) {
       }
     }
 
-    // ALTERAR (remove o compromisso antigo)
+    // ALTERAR (remove compromisso antigo)
     for (const palavra of sinonimosEditar) {
       if (mensagemLower.includes(palavra)) {
         for (const compromisso of compromissos) {
-          if (mensagemLower.includes(compromisso.resposta_gerada.toLowerCase())) {
+          if (mensagemLower.includes(compromisso.nome?.toLowerCase())) {
             await supabase.from('compromissos').delete().eq('id', compromisso.id);
             break;
           }
@@ -54,7 +53,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // HISTÓRICO para contexto da IA
+    // HISTÓRICO para IA
     const { data: historico } = await supabase
       .from('mensagens')
       .select('papel, conteudo')
@@ -64,21 +63,18 @@ export default async function handler(req, res) {
 
     const contexto = historico.map((msg) => ({ role: msg.papel, content: msg.conteudo }));
 
-    // Prompt de sistema
     contexto.unshift({
       role: 'system',
       content:
-        'Você é uma secretária virtual. Sua função é ajudar a marcar, alterar e desmarcar compromissos reais do usuário, que ficam armazenados em um banco de dados. Seja clara, objetiva e só fale o que tiver certeza com base na memória. Se não souber, diga que não sabe.',
+        'Você é uma secretária virtual. Sua função é marcar, desmarcar e alterar compromissos reais do usuário. Seja clara e objetiva. Com base na instrução do usuário, você responderá apenas o necessário.',
     });
 
-    // Lista atual de compromissos
-    const listaCompromissos = compromissos.map((c) => `• ${c.resposta_gerada}`).join('\n') || 'Nenhum compromisso marcado.';
+    const listaCompromissos = compromissos.map((c) => `• ${c.nome} - ${c.data} às ${c.hora}`).join('\n') || 'Nenhum compromisso marcado.';
     contexto.unshift({
       role: 'system',
-      content: `Lista atual de compromissos do usuário:\n${listaCompromissos}`,
+      content: `Compromissos atuais:\n${listaCompromissos}`,
     });
 
-    // Chamada OpenAI
     const respostaIA = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -98,14 +94,22 @@ export default async function handler(req, res) {
     }
 
     const respostaTexto = data.choices[0].message.content;
-
-    // Salvar resposta da IA
     await supabase.from('mensagens').insert({ conversa_id, papel: 'assistant', conteudo: respostaTexto });
 
-    // MARCAR compromisso
+    // MARCAR
     for (const palavra of sinonimosMarcar) {
       if (mensagemLower.includes(palavra)) {
-        await supabase.from('compromissos').insert({ mensagem_original: mensagem, resposta_gerada: respostaTexto });
+        const nomeExtraido = mensagem.match(/com\s(\w+)/i)?.[1] || 'compromisso';
+        const horaExtraida = mensagem.match(/(\d{1,2}h)/i)?.[1] || '00h';
+        const dataExtraida = mensagem.match(/amanhã|segunda|terça|quarta|quinta|sexta|sábado|domingo|hoje/i)?.[0] || 'indefinida';
+
+        await supabase.from('compromissos').insert({
+          nome: nomeExtraido,
+          data: dataExtraida,
+          hora: horaExtraida,
+          descricao: respostaTexto
+        });
+
         break;
       }
     }
