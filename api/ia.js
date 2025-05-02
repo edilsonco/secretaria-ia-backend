@@ -1,47 +1,39 @@
-/* api/ia.js  –  Secretaria IA (fuso: América/São Paulo) */
-
+/* api/ia.js  –  Secretaria IA (fuso América/São Paulo) */
 import { createClient } from '@supabase/supabase-js';
 import OpenAI from 'openai';
 
-/* ─── 1. Instâncias ───────────────────────────────────── */
+/* ────────── 1. Instâncias ────────── */
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-/* ─── 2. Utilidades ───────────────────────────────────── */
-
-/** Converte frase “05/05/2025 às 19h” ou “2025-05-05 19:30” em string ISO já com
- *  fuso −03:00  (Brasil – horário padrão de São Paulo).                       */
+/* ────────── 2. Utilidades ────────── */
+/** Converte frases como:
+ *  • “2025-05-05 às 19h”
+ *  • “05/05/2025 19:30”
+ *  • “às 18h”
+ *  em ISO `YYYY-MM-DDTHH:MM:00-03:00` */
 function parseDateTime(texto) {
-  // data     05/05/2025  ou  2025-05-05   (opcional)
-  // hora     19h, 19:00, 19h30, 7h, 07:00, etc.   (obrigatória)
-  const rx = /(\d{4}-\d{2}-\d{2}|\d{2}\/\d{2}(?:\/\d{4})?)?[^0-9]*(\d{1,2})(?::|h)?(\d{2})?\s?(?:h|horas?)?/iu;
-  const m = texto.match(rx);
-  if (!m) return null;
+  const dataM = texto.match(/\b(\d{4}-\d{2}-\d{2}|\d{2}\/\d{2}\/\d{4})\b/);
+  const horaM = texto.match(/(?:\b[àa]s?\s+|\s)(\d{1,2})(?:[:h](\d{2}))?\s?(?:h|horas?)?\b/i);
+  if (!horaM) return null;                                       // hora obrigatória
 
-  /* ----- Data ----- */
-  let [dataRaw] = m;
-  const dataTxt = m[1];
+  const hh = horaM[1].padStart(2, '0');
+  const mm = (horaM[2] ?? '00').padEnd(2, '0');
+
   let isoDate;
-  if (dataTxt) {
-    isoDate = dataTxt.includes('-')
-      ? dataTxt                                  // YYYY-MM-DD
-      : dataTxt.split('/').reverse().join('-');  // DD/MM/YYYY → YYYY-MM-DD
+  if (dataM) {
+    isoDate = dataM[1].includes('-')
+      ? dataM[1]                                          // 2025-05-05
+      : dataM[1].split('/').reverse().join('-');          // 05/05/2025 → 2025-05-05
   } else {
-    isoDate = new Date().toISOString().slice(0, 10); // hoje
+    isoDate = new Date().toISOString().slice(0, 10);      // hoje
   }
-
-  /* ----- Hora ----- */
-  const hh  = m[2].padStart(2, '0');
-  const mm  = (m[3] ?? '00').padEnd(2, '0');
-
-  /*   ISO local:  YYYY-MM-DD T HH:MM:00-03:00   */
-  return `${isoDate}T${hh}:${mm}:00-03:00`;
+  return `${isoDate}T${hh}:${mm}:00-03:00`;               // UTC-3
 }
 
-/** Extrai nome da pessoa/assunto após “com …”   */
 function pessoaDoTexto(txt) {
   const m = txt.match(/com ([\p{L}\s]+)/iu);
   return m ? m[1].trim() : null;
@@ -51,14 +43,13 @@ function tituloComp(txt) {
   return `Reunião com ${nome}`;
 }
 
-/* Verbos de ação */
+/* Verbos */
 const V_MARCAR  = ['marque','marcar','marca','agende','agendar','agenda','reserve','reservar'];
 const V_CANCEL  = ['desmarque','desmarcar','cancele','cancelar','cancela','remova','remover'];
 const V_ALTERAR = ['altere','alterar','mude','muda','troque','troca','edite','editar'];
 
-/* ─── 3. Handler ─────────────────────────────────────── */
+/* ────────── 3. Handler ────────── */
 export default async function handler(req, res) {
-  /* CORS */
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -70,7 +61,7 @@ export default async function handler(req, res) {
 
   const txt = mensagem.toLowerCase();
 
-  /* ── MARCAR ─────────────────────── */
+  /* ── MARCAR ── */
   if (V_MARCAR.some(v => txt.includes(v))) {
     const iso = parseDateTime(mensagem);
     const titulo = tituloComp(mensagem);
@@ -85,7 +76,7 @@ export default async function handler(req, res) {
     return res.json({ resposta: `Compromisso "${titulo}" marcado para ${horaShow}.` });
   }
 
-  /* ── CANCELAR ───────────────────── */
+  /* ── CANCELAR ── */
   if (V_CANCEL.some(v => txt.includes(v))) {
     const pessoa = pessoaDoTexto(mensagem);
     if (!pessoa) return res.json({ resposta: 'Qual compromisso devo cancelar?' });
@@ -98,7 +89,7 @@ export default async function handler(req, res) {
     return res.json({ resposta: `Compromisso relacionado a ${pessoa} cancelado.` });
   }
 
-  /* ── ALTERAR ────────────────────── */
+  /* ── ALTERAR ── */
   if (V_ALTERAR.some(v => txt.includes(v))) {
     const pessoa = pessoaDoTexto(mensagem);
     const novaISO = parseDateTime(mensagem);
@@ -115,11 +106,11 @@ export default async function handler(req, res) {
     });
   }
 
-  /* ── LISTAR ─────────────────────── */
+  /* ── LISTAR ── */
   const { data: rows } = await supabase
     .from('appointments')
     .select('*')
-    .eq('status','marcado')
+    .eq('status', 'marcado')
     .order('data_hora');
 
   if (!rows.length)
