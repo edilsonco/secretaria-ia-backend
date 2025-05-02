@@ -1,17 +1,17 @@
-/* api/ia.js  –  Secretaria IA  (Horário fixo: America/Sao_Paulo) */
+/* api/ia.js — Secretaria IA (horário fixo America/Sao_Paulo) */
 import { createClient } from '@supabase/supabase-js';
 import OpenAI from 'openai';
 
-/* ── 1. Instâncias ── */
+/* 1. Instâncias ---------------------------------------------------------- */
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-/* ── 2. Utilidades ── */
+/* 2. Utilidades ---------------------------------------------------------- */
 function parseDateTime(texto) {
-  // Data opcional  ...  Hora obrigatória
+  /* Hora obrigatória; Data opcional; “amanhã” = hoje+1  */
   const dataM = texto.match(/\b(\d{4}-\d{2}-\d{2}|\d{2}\/\d{2}\/\d{4})\b/);
   const horaM = texto.match(/(?:\b[àa]s?\s+|\s)(\d{1,2})(?:[:h](\d{2}))?\s?(?:h|horas?)?\b/i);
   if (!horaM) return null;
@@ -22,12 +22,16 @@ function parseDateTime(texto) {
   let isoDate;
   if (dataM) {
     isoDate = dataM[1].includes('-')
-      ? dataM[1]                                   // YYYY-MM-DD
-      : dataM[1].split('/').reverse().join('-');   // DD/MM/YYYY → YYYY-MM-DD
+      ? dataM[1]                                   // 2025-05-05
+      : dataM[1].split('/').reverse().join('-');   // 05/05/2025 → 2025-05-05
+  } else if (/\bamanh[ãa]\b/i.test(texto)) {
+    const dt = new Date();             // hoje
+    dt.setDate(dt.getDate() + 1);       // +1 dia
+    isoDate = dt.toISOString().slice(0, 10);
   } else {
     isoDate = new Date().toISOString().slice(0, 10); // hoje
   }
-  return `${isoDate}T${hh}:${mm}:00-03:00`;          // fixa UTC-3
+  return `${isoDate}T${hh}:${mm}:00-03:00`;          // UTC-3
 }
 
 function pessoaDoTexto(txt) {
@@ -38,8 +42,8 @@ function tituloComp(txt) {
   const nome = pessoaDoTexto(txt) ?? 'Contato';
   return `Reunião com ${nome}`;
 }
-function brTime(dateISO) {
-  return new Date(dateISO).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+function brTime(iso) {
+  return new Date(iso).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 }
 
 /* Verbos chave */
@@ -47,7 +51,7 @@ const V_MARCAR  = ['marque','marcar','marca','agende','agendar','agenda','reserv
 const V_CANCEL  = ['desmarque','desmarcar','cancele','cancelar','cancela','remova','remover'];
 const V_ALTERAR = ['altere','alterar','mude','muda','troque','troca','edite','editar'];
 
-/* ── 3. Handler ── */
+/* 3. Handler ------------------------------------------------------------- */
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -59,60 +63,45 @@ export default async function handler(req, res) {
   if (!mensagem) return res.status(400).json({ erro: 'Mensagem não fornecida' });
   const txt = mensagem.toLowerCase();
 
-  /* ---- MARCAR ---- */
+  /* ── MARCAR ── */
   if (V_MARCAR.some(v => txt.includes(v))) {
     const iso = parseDateTime(mensagem);
     const titulo = tituloComp(mensagem);
-    await supabase.from('appointments').insert({
-      titulo,
-      data_hora: iso,
-      status: 'marcado'
-    });
-    return res.json({
-      resposta: `Compromisso "${titulo}" marcado para ${brTime(iso)}.`
-    });
+    await supabase.from('appointments').insert({ titulo, data_hora: iso, status: 'marcado' });
+    return res.json({ resposta: `Compromisso "${titulo}" marcado para ${brTime(iso)}.` });
   }
 
-  /* ---- CANCELAR ---- */
+  /* ── CANCELAR ── */
   if (V_CANCEL.some(v => txt.includes(v))) {
     const pessoa = pessoaDoTexto(mensagem);
     if (!pessoa) return res.json({ resposta: 'Qual compromisso devo cancelar?' });
-
-    await supabase
-      .from('appointments')
-      .update({ status: 'cancelado' })
-      .ilike('titulo', `%${pessoa}%`);
-
+    await supabase.from('appointments').update({ status: 'cancelado' }).ilike('titulo', `%${pessoa}%`);
     return res.json({ resposta: `Compromisso relacionado a ${pessoa} cancelado.` });
   }
 
-  /* ---- ALTERAR ---- */
+  /* ── ALTERAR ── */
   if (V_ALTERAR.some(v => txt.includes(v))) {
     const pessoa = pessoaDoTexto(mensagem);
     const novaISO = parseDateTime(mensagem);
-    if (!pessoa || !novaISO)
-      return res.json({ resposta: 'Preciso saber quem e nova data/hora.' });
-
-    await supabase
-      .from('appointments')
+    if (!pessoa || !novaISO) return res.json({ resposta: 'Preciso saber quem e nova data/hora.' });
+    await supabase.from('appointments')
       .update({ data_hora: novaISO, status: 'remarcado' })
       .ilike('titulo', `%${pessoa}%`);
-
-    return res.json({
-      resposta: `Compromisso com ${pessoa} remarcado para ${brTime(novaISO)}.`
-    });
+    return res.json({ resposta: `Compromisso com ${pessoa} remarcado para ${brTime(novaISO)}.` });
   }
 
-  /* ---- LISTAR ---- */
+  /* ── LISTAR ── */
   const { data: rows } = await supabase
     .from('appointments')
     .select('*')
-    .eq('status', 'marcado')
+    .eq('status','marcado')
     .order('data_hora');
 
   if (!rows.length)
     return res.json({ resposta: 'Você não tem compromissos marcados.' });
 
-  const lista = rows.map(r => `• ${r.titulo} @ ${brTime(r.data_hora)}`).join('\n');
+  const lista = rows
+    .map(r => `• ${r.titulo} @ ${brTime(r.data_hora)}`)
+    .join('\n');
   return res.json({ resposta: `Lista de compromissos:\n${lista}` });
 }
