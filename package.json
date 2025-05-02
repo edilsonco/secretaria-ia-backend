@@ -1,5 +1,9 @@
 {
+  "name": "secretaria-ia-backend",
+  "version": "1.0.0",
+  "type": "module",
   "dependencies": {
-    "@supabase/supabase-js": "^2.49.4"
+    "openai": "^4.0.0",
+    "@supabase/supabase-js": "^2.39.0"
   }
 }

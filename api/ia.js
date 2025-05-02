@@ -1,12 +1,14 @@
 import { createClient } from '@supabase/supabase-js';
 import OpenAI from 'openai';
 
+// --- inicializações ---
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+// --- funções que o GPT pode chamar ---
 const functions = [
   {
     name: 'marcar',
@@ -14,9 +16,9 @@ const functions = [
     parameters: {
       type: 'object',
       properties: {
-        titulo: { type: 'string', description: 'Título do compromisso' },
-        data:   { type: 'string', description: 'Data YYYY-MM-DD' },
-        hora:   { type: 'string', description: 'Hora HH:MM (24h)' }
+        titulo: { type: 'string' },
+        data:   { type: 'string', description:'AAAA-MM-DD' },
+        hora:   { type: 'string', description:'HH:MM (24h)' }
       },
       required: ['titulo','data','hora']
     }
@@ -27,10 +29,10 @@ const functions = [
     parameters: {
       type: 'object',
       properties: {
-        id:       { type: 'string', description: 'ID do compromisso a alterar' },
+        id:        { type:'string' },
         novo_titulo:{ type:'string' },
-        nova_data:  { type:'string' },
-        nova_hora:  { type:'string' }
+        nova_data: { type:'string' },
+        nova_hora: { type:'string' }
       },
       required: ['id']
     }
@@ -40,111 +42,99 @@ const functions = [
     description: 'Cancela um compromisso',
     parameters: {
       type: 'object',
-      properties: {
-        id:     { type:'string',description:'ID do compromisso' },
-        titulo: { type:'string',description:'Título, caso não saiba o ID' }
-      }
+      properties: { id:{type:'string'} },
+      required: ['id']
     }
   },
   {
     name: 'listar',
     description: 'Lista compromissos futuros',
-    parameters:{ type:'object', properties:{} }
+    parameters: { type:'object',properties:{} }
   }
 ];
 
-export default async function handler(req,res){
-  res.setHeader('Access-Control-Allow-Origin','*');
-  res.setHeader('Access-Control-Allow-Methods','POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers','Content-Type');
-  if(req.method==='OPTIONS') return res.status(200).end();
-  if(req.method!=='POST')    return res.status(405).end();
+// --- handler da rota ---
+export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'POST')   return res.status(405).end('Método não permitido');
 
   const { mensagem } = req.body;
-  if(!mensagem) return res.status(400).json({erro:'Mensagem não fornecida'});
+  if (!mensagem) return res.status(400).json({ erro:'Mensagem ausente' });
 
-  // monta mensagens
-  const system = { role:'system',content:
-    'Você é uma secretária virtual. Use APENAS as funções fornecidas. '
-  };
-  const userMsg = { role:'user',content: mensagem };
+  // mensagem de sistema + usuário
+  const mensagens = [
+    { role:'system', content:'Você é uma secretária virtual. Use apenas as funções disponíveis.' },
+    { role:'user',   content: mensagem }
+  ];
 
-  // chama OpenAI
-  const resp = await openai.chat.completions.create({
+  // chamada ao GPT
+  const gpt = await openai.chat.completions.create({
     model:'gpt-3.5-turbo-0613',
-    messages:[system,userMsg],
+    messages: mensagens,
     functions,
     function_call:'auto',
     temperature:0.2
   });
 
-  const choice = resp.choices[0].message;
+  const escolha = gpt.choices[0].message;
 
-  // se modelo NÃO chamou função => apenas devolver a resposta direta
-  if(!choice.function_call){
-    return res.status(200).json({resposta: choice.content});
+  // se o GPT NÃO chamou função, devolve texto simples
+  if (!escolha.function_call) {
+    return res.status(200).json({ resposta: escolha.content });
   }
 
-  // houve chamada de função
-  const { name, arguments: argsJSON } = choice.function_call;
+  // --- execução da função solicitada ---
+  const { name, arguments: argsJSON } = escolha.function_call;
   const args = JSON.parse(argsJSON);
+  let resposta = '';
 
-  let respostaUsuario = '';
-
-  try{
-    if(name==='marcar'){
+  try {
+    if (name === 'marcar') {
       const ts = new Date(`${args.data}T${args.hora}:00`);
       await supabase.from('appointments').insert({
         titulo: args.titulo,
         data_hora: ts,
-        status:'marcado'
+        status: 'marcado'
       });
-      respostaUsuario = `Compromisso "${args.titulo}" marcado para ${ts.toLocaleString('pt-BR')}.`;
+      resposta = `Compromisso "${args.titulo}" marcado para ${ts.toLocaleString('pt-BR')}.`;
     }
 
-    if(name==='alterar'){
+    if (name === 'alterar') {
       const update = {};
-      if(args.novo_titulo) update.titulo = args.novo_titulo;
-      if(args.nova_data && args.nova_hora){
+      if (args.novo_titulo) update.titulo = args.novo_titulo;
+      if (args.nova_data && args.nova_hora)
         update.data_hora = new Date(`${args.nova_data}T${args.nova_hora}:00`);
-      }
-      const { error } = await supabase
-        .from('appointments')
-        .update(update)
+      await supabase.from('appointments').update(update).eq('id', args.id);
+      resposta = 'Compromisso atualizado com sucesso.';
+    }
+
+    if (name === 'cancelar') {
+      await supabase.from('appointments')
+        .update({ status:'cancelado' })
         .eq('id', args.id);
-      if(error) throw error;
-      respostaUsuario = 'Compromisso atualizado com sucesso.';
+      resposta = 'Compromisso cancelado.';
     }
 
-    if(name==='cancelar'){
-      const ref = args.id
-        ? supabase.from('appointments').update({status:'cancelado'}).eq('id',args.id)
-        : supabase.from('appointments').update({status:'cancelado'}).ilike('titulo',`%${args.titulo}%`);
-      const { error } = await ref;
-      if(error) throw error;
-      respostaUsuario = 'Compromisso cancelado.';
-    }
-
-    if(name==='listar'){
+    if (name === 'listar') {
       const { data } = await supabase
         .from('appointments')
         .select('*')
         .eq('status','marcado')
         .gte('data_hora', new Date().toISOString())
         .order('data_hora',{ascending:true});
-
-      if(!data.length) respostaUsuario = 'Você não tem compromissos futuros.';
-      else {
-        respostaUsuario = data.map(c =>
-          `• ${c.titulo} em ${new Date(c.data_hora).toLocaleString('pt-BR')}`
-        ).join('\\n');
-      }
+      resposta = data.length
+        ? data.map(c => `• ${c.titulo} em ${new Date(c.data_hora).toLocaleString('pt-BR')}`).join('\\n')
+        : 'Você não tem compromissos futuros.';
     }
-  }catch(e){
-    console.error(e);
-    return res.status(500).json({erro:'Falha ao acessar banco',detalhes:e.message});
-  }
 
-  // envia resposta final ao usuário
-  return res.status(200).json({resposta: respostaUsuario});
+    return res.status(200).json({ resposta });
+
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ erro:'Falha no banco', detalhes:e.message });
+  }
 }
