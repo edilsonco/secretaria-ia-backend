@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import chrono from 'chrono-node';
+import * as chrono from 'chrono-node';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
@@ -17,6 +17,7 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ erro: 'Método não permitido' });
 
@@ -24,86 +25,109 @@ export default async function handler(req, res) {
   if (!mensagem) return res.status(400).json({ erro: 'Mensagem não fornecida' });
 
   try {
-    // 1. Salvar mensagem do usuário na memória
+    // 1. Salvar mensagem do usuário
     await supabase.from('mensagens').insert({ conversa_id, papel: 'user', conteudo: mensagem });
 
-    // 2. Buscar histórico
+    // 2. Buscar contexto (últimas 10 mensagens)
     const { data: historico } = await supabase
       .from('mensagens')
       .select('papel, conteudo')
       .eq('conversa_id', conversa_id)
       .order('criado_em', { ascending: true })
-      .limit(20);
+      .limit(10);
+
     const contexto = historico.map(msg => ({ role: msg.papel, content: msg.conteudo }));
+    contexto.unshift({ role: 'system', content: 'Você é uma secretária virtual...'});
 
-    // 3. Prompt de sistema
-    contexto.unshift({
-      role: 'system',
-      content: 'Você é uma secretária virtual. Ajuda a marcar, alterar e desmarcar compromissos reais do usuário no banco de dados. Seja objetiva e só fale o que souber.'
-    });
-
-    // 4. Contexto de compromissos atuais
+    // 3. Ler compromissos
     const { data: compromissos } = await supabase
       .from('appointments')
       .select('*')
-      .eq('status', 'marcado')
       .order('data_hora', { ascending: true });
-    const lista = compromissos.length
-      ? compromissos.map(c => `• ${c.titulo} em ${dayjs(c.data_hora).tz('America/Sao_Paulo').format('DD/MM/YYYY [às] HH:mm')}`).join('\n')
-      : 'Nenhum compromisso marcado.';
-    contexto.unshift({ role: 'system', content: `Compromissos atuais:\n${lista}` });
 
-    // 5. Enviar para OpenAI
-    const respostaIA = await fetch('https://api.openai.com/v1/chat/completions', {
+    const lista = compromissos
+      .filter(c => c.status === 'marcado')
+      .map(c => `• ${c.titulo} @ ${dayjs(c.data_hora).format('DD/MM/YYYY, HH:mm')}`)
+      .join('\n') || 'Nenhum compromisso marcado.';
+
+    contexto.unshift({ role: 'system', content: `Agenda atual:\n${lista}` });
+
+    // 4. Extrair intenção via OpenAI
+    const chatRes = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
       },
-      body: JSON.stringify({ model: 'gpt-3.5-turbo', temperature: 0.5, messages: contexto })
+      body: JSON.stringify({ model: 'gpt-4', temperature: 0, messages: contexto })
     });
-    const data = await respostaIA.json();
-    if (respostaIA.status !== 200) throw new Error(JSON.stringify(data));
-    const respostaTexto = data.choices[0].message.content;
+    const { choices, error: aiErr } = await chatRes.json();
+    if (chatRes.status !== 200) throw new Error(aiErr?.message || 'Erro na OpenAI');
 
-    // 6. Salvar resposta na memória
-    await supabase.from('mensagens').insert({ conversa_id, papel: 'assistant', conteudo: respostaTexto });
+    let resposta = choices[0].message.content.trim();
 
-    // 7. Lógica de CRUD: marcar, desmarcar, alterar
-    const lower = respostaTexto.toLowerCase();
-    if (lower.includes('marcado') || lower.includes('agendado')) {
-      // parse data/hora do texto original
-      const dt = chrono.pt.parseDate(mensagem, new Date(), { forwardDate: true });
-      const titulo = mensagem.replace(/.*reuni[oã]o/i, '').trim();
-      await supabase.from('appointments').insert([{ titulo, data_hora: dt, status: 'marcado' }]);
-    } else if (lower.match(/desmarc[ae]|cancelad/i)) {
-      // extrai título ou nome
-      // marca status = 'cancelado'
-      const nome = (mensagem.match(/reuni[oã]o com ([^\s]+)/i) || [])[1];
-      if (nome) {
-        await supabase
-          .from('appointments')
-          .update({ status: 'cancelado' })
-          .ilike('titulo', `%${nome}%`)
-          .eq('status', 'marcado');
+    // 5. Lógica de CRUD
+    // Marcar novo
+    if (/marque|agende|reserve/i.test(mensagem)) {
+      const parsed = chrono.parseDate(mensagem, new Date(), { forwardDate: true });
+      if (parsed) {
+        const title = mensagem.replace(/.*?(?:reuni[oã]o|compromisso)\s+com\s+([\w\s]+)\s+.*/i, 'Reunião com $1');
+        await supabase.from('appointments').insert({ titulo: title, data_hora: parsed });
+        resposta = `Compromisso "${title}" marcado para ${dayjs(parsed).format('DD/MM/YYYY, HH:mm')}.`;
       }
-    } else if (lower.match(/(alter|mud)/i)) {
-      // extrair novo horário e atualizar
-      const dt = chrono.pt.parseDate(mensagem, new Date(), { forwardDate: true });
-      const nome = (mensagem.match(/reuni[oã]o com ([^\s]+)/i) || [])[1];
-      if (nome && dt) {
-        await supabase
+    }
+    // Listar
+    else if (/quais|lista|mostre/i.test(mensagem)) {
+      resposta = lista.includes('Nenhum')
+        ? `Não há compromissos marcados para a data solicitada.`
+        : `Agenda:\n${lista}`;
+    }
+    // Editar
+    else if (/mude|altere|modifique/i.test(mensagem)) {
+      const parsed = chrono.parseDate(mensagem, new Date(), { forwardDate: true });
+      const match = mensagem.match(/(reuni[oã]o) com ([\w\s]+) para/i);
+      if (parsed && match) {
+        const who = match[2].trim();
+        const { data: found } = await supabase
           .from('appointments')
-          .update({ data_hora: dt })
-          .ilike('titulo', `%${nome}%`)
+          .select('id')
+          .ilike('titulo', `%${who}%`)
           .eq('status', 'marcado');
+        if (found.length) {
+          await supabase
+            .from('appointments')
+            .update({ data_hora: parsed })
+            .eq('id', found[0].id);
+          resposta = `Compromisso "Reunião com ${who}" alterado para ${dayjs(parsed).format('DD/MM/YYYY, HH:mm')}.`;
+        }
+      }
+    }
+    // Desmarcar
+    else if (/desmarque|cancele|remova/i.test(mensagem)) {
+      const match = mensagem.match(/(reuni[oã]o) com ([\w\s]+)/i);
+      if (match) {
+        const who = match[2].trim();
+        const { data: found } = await supabase
+          .from('appointments')
+          .select('id')
+          .ilike('titulo', `%${who}%`)
+          .eq('status', 'marcado');
+        if (found.length) {
+          await supabase
+            .from('appointments')
+            .update({ status: 'cancelado' })
+            .eq('id', found[0].id);
+          resposta = `Compromisso "Reunião com ${who}" cancelado.`;
+        }
       }
     }
 
-    // Responder
-    res.status(200).json({ resposta: respostaTexto });
-  } catch (error) {
-    console.error('Erro interno:', error);
-    res.status(500).json({ erro: 'Erro interno no servidor', detalhes: error.message });
+    // 6. Salvar resposta
+    await supabase.from('mensagens').insert({ conversa_id, papel: 'assistant', conteudo: resposta });
+
+    res.status(200).json({ resposta });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: 'Erro interno', detalhes: err.message });
   }
 }
