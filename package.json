@@ -6,7 +6,6 @@
     "@supabase/supabase-js": "^2.39.0",
     "openai": "^4.25.0",
     "dayjs": "^1.11.10",
-    "dayjs-plugin-utc": "^1.0.4",
-    "chrono-node": "^2.7.3"
+    "chrono-node": "^2.3.0"
   }
 }
