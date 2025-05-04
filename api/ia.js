@@ -1,26 +1,20 @@
 // api/ia.js
 
-// 1) Garante o fuso de SP
+// 1) Garante o fuso de SP (UTC–3)
 process.env.TZ = process.env.TIMEZONE || 'America/Sao_Paulo';
 
 import { createClient } from '@supabase/supabase-js';
-import * as chrono from 'chrono-node';
-
-// 2) Carrega e registra o parser de PT-BR
-import pt from 'chrono-node/dist/esm/locales/pt/index.js';
-chrono.parsers.unshift(...pt.parsers);
-chrono.refiners.unshift(...pt.refiners);
-
+import chrono from 'chrono-node';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
 
-// 3) Configura Day.js para SP
+// 2) Configura Day.js para UTC e fuso
 dayjs.extend(utc);
 dayjs.extend(timezone);
 dayjs.tz.setDefault(process.env.TIMEZONE || 'America/Sao_Paulo');
 
-// 4) Cliente Supabase
+// 3) Cliente Supabase
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_KEY
@@ -39,36 +33,30 @@ export default async function handler(req, res) {
   }
 
   try {
-    // 5) Parse em linguagem natural
-    const resultados = chrono.parse(mensagem, new Date());
-    const parsed = resultados.find(r => r.start);
-    if (!parsed) {
+    // 4) Parse de data/hora em linguagem natural
+    const date = chrono.parseDate(mensagem, new Date());
+    if (!date) {
       return res
         .status(400)
         .json({ resposta: 'Não entendi a data/hora. Pode reformular?' });
     }
 
-    const data = parsed.start.date();
-
-    // 6) Extrai título tirando a parte de data/hora
+    // 5) Extrai título (tira a parte de data/hora e possíveis verbos)
     let titulo = mensagem
-      .replace(parsed.text, '')
+      .replace(chrono.parse(mensagem)[0]?.text || '', '')
       .replace(/^(Marque|Agende|Reserve)\s*/i, '')
       .trim();
     if (!titulo) titulo = 'Compromisso';
 
-    // 7) Insere no Supabase
+    // 6) Insere no Supabase
     const { error } = await supabase
       .from('appointments')
-      .insert({ titulo, data_hora: dayjs(data).toISOString() });
+      .insert({ titulo, data_hora: dayjs(date).toISOString() });
 
-    if (error) {
-      console.error('Supabase insert error:', error);
-      throw error;
-    }
+    if (error) throw error;
 
-    // 8) Formata resposta em PT-BR
-    const fmt = dayjs(data).format('DD/MM/YYYY [às] HH:mm');
+    // 7) Formata resposta
+    const fmt = dayjs(date).format('DD/MM/YYYY [às] HH:mm');
     return res
       .status(200)
       .json({ resposta: `Compromisso "${titulo}" marcado para ${fmt}.` });
