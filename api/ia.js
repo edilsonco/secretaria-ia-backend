@@ -1,88 +1,69 @@
 import { createClient } from '@supabase/supabase-js';
-import { pt } from 'chrono-node';
+import chrono from 'chrono-node';
 import dayjs from 'dayjs';
-import utc from 'dayjs/plugin/utc.js';
-import timezone from 'dayjs/plugin/timezone.js';
+import utc from 'dayjs/plugin/utc';
+import timezone from 'dayjs/plugin/timezone';
 
-// configura dayjs
+// Estenda o dayjs com plugins
 dayjs.extend(utc);
 dayjs.extend(timezone);
-const defaultTimezone = process.env.TIMEZONE || 'America/Sao_Paulo';
-dayjs.tz.setDefault(defaultTimezone);
 
-// valida variáveis de ambiente
+// Defina o fuso horário padrão
+const TIMEZONE = process.env.TIMEZONE || 'America/Sao_Paulo';
+dayjs.tz.setDefault(TIMEZONE);
+
+// Inicialize o cliente do Supabase
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
-if (!supabaseUrl) throw new Error("Missing SUPABASE_URL");
-if (!supabaseKey) throw new Error("Missing SUPABASE_KEY");
-
-// inicializa supabase
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', ['POST']);
-    return res.status(405).json({ error: `Method ${req.method} Not Allowed` });
-  }
-
-  try {
+  if (req.method === 'POST') {
     const { mensagem } = req.body;
-    if (!mensagem || typeof mensagem !== 'string' || !mensagem.trim()) {
-      return res.status(400).json({ error: 'Campo "mensagem" é obrigatório.' });
+    if (!mensagem) {
+      return res.status(400).json({ error: 'Mensagem é obrigatória' });
     }
 
-    // parse de data/hora
-    const agora   = dayjs().tz(defaultTimezone).toDate();
-    const results = pt.parse(mensagem, agora, { forwardDate: true });
-    if (!results.length) {
-      return res.status(400).json({ error: 'Não foi possível identificar data/hora.' });
+    // Parseie a mensagem com chrono-node para extrair data/hora
+    const parsed = chrono.parse(mensagem, new Date(), { timezone: TIMEZONE });
+    if (parsed.length === 0) {
+      return res.status(400).json({ error: 'Nenhuma data/hora encontrada na mensagem' });
     }
 
-    const result  = results[0];
-    const when    = result.start.date();
+    // Use o primeiro resultado de parsing
+    const parsedDate = parsed[0];
+    const rawDate = parsedDate.start.date();
 
-    // se minuto não foi especificado, zera para :00
-    if (!result.start.isCertain('minute')) {
-      when.setMinutes(0, 0, 0);
+    // Ajuste o fuso horário explicitamente para America/Sao_Paulo
+    const dataHora = dayjs(rawDate).tz(TIMEZONE, true).toDate();
+
+    // Extraia o título removendo a data/hora e verbos como "Marque", "Agende"
+    let title = mensagem.replace(parsedDate.text, '').trim();
+    const verbs = ['Marque', 'Agende'];
+    for (const verb of verbs) {
+      if (title.startsWith(verb + ' ')) {
+        title = title.substring(verb.length + 1).trim();
+        break;
+      }
     }
 
-    const textoDataHora = result.text;
-
-    // extração de título
-    let titulo = mensagem
-      .replace(textoDataHora, '')
-      .replace(/^(Marque|Agende|Criar|Adicionar|Lembrete)\s+/i, '')
-      .replace(/\s+/g, ' ')
-      .trim();
-    if (!titulo) titulo = 'Compromisso';
-
-    // insere no Supabase
-    const { data: insertData, error: insertError } = await supabase
+    // Insira o registro no Supabase
+    const { data, error } = await supabase
       .from('appointments')
-      .insert([{ titulo, data_hora: when.toISOString(), status: 'marcado' }])
+      .insert([{ titulo: title, data_hora: dataHora, status: 'marcado' }])
       .select()
       .single();
-    if (insertError) {
-      console.error('Erro ao inserir:', insertError);
-      return res.status(500).json({ error: 'Erro ao salvar compromisso.' });
+
+    if (error) {
+      return res.status(500).json({ error: error.message });
     }
 
-    // formata para resposta
-    const dataHoraFormatada = dayjs(when)
-      .tz(defaultTimezone)
-      .format('DD/MM/YYYY [às] HH:mm');
+    // Formate a data para a resposta
+    const formattedDate = dayjs(dataHora).tz(TIMEZONE).format('DD/MM/YYYY [às] HH:mm');
 
-    return res.status(200).json({
-      confirmacao: `Compromisso "${insertData.titulo}" agendado para ${dataHoraFormatada}.`,
-      id: insertData.id,
-      titulo: insertData.titulo,
-      data_hora: dataHoraFormatada
-    });
-  } catch (error) {
-    console.error('Erro na API:', error);
-    if (error instanceof SyntaxError && error.message.includes('JSON')) {
-      return res.status(400).json({ error: 'JSON inválido no corpo da requisição.' });
-    }
-    return res.status(500).json({ error: 'Erro interno no servidor.' });
+    return res.status(200).json({ mensagem: `Compromisso marcado: ${title} em ${formattedDate}` });
+  } else {
+    res.setHeader('Allow', ['POST']);
+    return res.status(405).json({ error: `Método ${req.method} não permitido` });
   }
 }
