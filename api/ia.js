@@ -35,17 +35,23 @@ export default async function handler(req, res) {
     let rawDate = parsedDate.start.date();
 
     // Ajuste para garantir que "amanhã" seja interpretado corretamente
+    const currentDate = dayjs().tz(TIMEZONE);
+    let targetDate = dayjs(rawDate).tz(TIMEZONE);
     if (parsedDate.text.toLowerCase().includes('amanhã')) {
-      rawDate = dayjs().add(1, 'day').hour(rawDate.getHours()).minute(rawDate.getMinutes()).toDate();
+      targetDate = currentDate.add(1, 'day').hour(targetDate.hour()).minute(targetDate.minute());
     }
 
     // Ajuste o fuso horário explicitamente para America/Sao_Paulo
-    const dataHora = dayjs(rawDate).tz(TIMEZONE, true).toDate();
+    const dataHora = targetDate.toDate();
 
     // Extraia o título removendo a data/hora e verbos como "Marque", "Agende"
-    let title = mensagem.replace(parsedDate.text, '').trim();
-    // Remova adicionalmente expressões de horário que podem não ter sido capturadas
-    title = title.replace(/às \d{1,2}h/g, '').replace(/amanhã/g, '').trim();
+    let title = mensagem;
+    // Remova a data/hora parseada
+    if (parsedDate.text) {
+      title = title.replace(parsedDate.text, '').trim();
+    }
+    // Remova expressões adicionais de data/hora
+    title = title.replace(/amanhã/gi, '').replace(/às\s*\d{1,2}(:\d{2})?h?/gi, '').replace(/às/gi, '').trim();
     const verbs = ['Marque', 'Agende'];
     for (const verb of verbs) {
       if (title.startsWith(verb + ' ')) {
