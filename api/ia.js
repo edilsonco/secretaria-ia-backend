@@ -36,7 +36,7 @@ export default async function handler(req, res) {
 
     // Ajuste para garantir que "amanhã" seja interpretado corretamente
     if (parsedDate.text.toLowerCase().includes('amanhã')) {
-      rawDate = dayjs(rawDate).add(1, 'day').toDate();
+      rawDate = dayjs().add(1, 'day').hour(rawDate.getHours()).minute(rawDate.getMinutes()).toDate();
     }
 
     // Ajuste o fuso horário explicitamente para America/Sao_Paulo
@@ -44,6 +44,8 @@ export default async function handler(req, res) {
 
     // Extraia o título removendo a data/hora e verbos como "Marque", "Agende"
     let title = mensagem.replace(parsedDate.text, '').trim();
+    // Remova adicionalmente expressões de horário que podem não ter sido capturadas
+    title = title.replace(/às \d{1,2}h/g, '').replace(/amanhã/g, '').trim();
     const verbs = ['Marque', 'Agende'];
     for (const verb of verbs) {
       if (title.startsWith(verb + ' ')) {
