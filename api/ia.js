@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import chrono from 'chrono-node';
+import * as chrono from 'chrono-node';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
