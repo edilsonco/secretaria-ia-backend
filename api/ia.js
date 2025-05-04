@@ -25,14 +25,19 @@ export default async function handler(req, res) {
     }
 
     // Parseie a mensagem com chrono-node para extrair data/hora
-    const parsed = chrono.parse(mensagem, new Date(), { timezone: TIMEZONE });
+    const parsed = chrono.parse(mensagem, new Date(), { timezone: TIMEZONE, forwardDate: true });
     if (parsed.length === 0) {
       return res.status(400).json({ error: 'Nenhuma data/hora encontrada na mensagem' });
     }
 
     // Use o primeiro resultado de parsing
     const parsedDate = parsed[0];
-    const rawDate = parsedDate.start.date();
+    let rawDate = parsedDate.start.date();
+
+    // Ajuste para garantir que "amanhã" seja interpretado corretamente
+    if (parsedDate.text.toLowerCase().includes('amanhã')) {
+      rawDate = dayjs(rawDate).add(1, 'day').toDate();
+    }
 
     // Ajuste o fuso horário explicitamente para America/Sao_Paulo
     const dataHora = dayjs(rawDate).tz(TIMEZONE, true).toDate();
