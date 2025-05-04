@@ -38,9 +38,8 @@ export default async function handler(req, res) {
     const currentDate = dayjs().tz(TIMEZONE).startOf('day');
     let targetDate = currentDate.add(1, 'day');
     // Preserva a hora extraída pelo chrono-node como hora local
-    const hour = rawDate.getHours();
-    const minute = rawDate.getMinutes();
-    // Aplica a hora diretamente no fuso horário local
+    const hour = parsedDate.start.get('hour');
+    const minute = parsedDate.start.get('minute') || 0;
     targetDate = targetDate.tz(TIMEZONE).hour(hour).minute(minute).second(0);
 
     // Ajuste o fuso horário explicitamente para America/Sao_Paulo
