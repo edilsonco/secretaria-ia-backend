@@ -35,10 +35,13 @@ export default async function handler(req, res) {
     let rawDate = parsedDate.start.date();
 
     // Ajuste para garantir que "amanhã" e a hora sejam interpretados corretamente
-    const currentDate = dayjs().tz(TIMEZONE);
-    let targetDate = currentDate.startOf('day').add(1, 'day');
-    // Preserva a hora extraída pelo chrono-node
-    targetDate = targetDate.hour(rawDate.getHours()).minute(rawDate.getMinutes());
+    const currentDate = dayjs().tz(TIMEZONE).startOf('day');
+    let targetDate = currentDate.add(1, 'day');
+    // Preserva a hora extraída pelo chrono-node como hora local
+    const hour = rawDate.getHours();
+    const minute = rawDate.getMinutes();
+    // Aplica a hora diretamente no fuso horário local
+    targetDate = targetDate.tz(TIMEZONE).hour(hour).minute(minute).second(0);
 
     // Ajuste o fuso horário explicitamente para America/Sao_Paulo
     const dataHora = targetDate.toDate();
