@@ -1,17 +1,15 @@
+// api/ia.js
 import { createClient } from '@supabase/supabase-js';
 import { Configuration, OpenAIApi } from 'openai';
+import chrono from 'chrono-node';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
-import chrono from 'chrono-node';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
-// usa a variável que você salvou no Vercel
-const TZ = process.env.APP_TIMEZONE || 'UTC';
-dayjs.tz.setDefault(TZ);
+dayjs.tz.setDefault(process.env.TIMEZONE);
 
-// inicializa Supabase e OpenAI
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -22,109 +20,48 @@ const openai = new OpenAIApi(
 );
 
 export default async function handler(req, res) {
-  // CORS
+  // CORS e validações básicas
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST')
-    return res.status(405).json({ error: 'Método não permitido' });
+    return res.status(405).json({ erro: 'Método não permitido' });
 
-  const { mensagem, conversa_id = 'default' } = req.body;
-  if (!mensagem) return res.status(400).json({ error: 'Mensagem não fornecida' });
+  const { mensagem } = req.body;
+  if (!mensagem)
+    return res.status(400).json({ erro: 'Mensagem não fornecida' });
 
   try {
-    // 1) Salva na memória
-    await supabase
-      .from('mensagens')
-      .insert({ conversa_id, papel: 'user', conteudo: mensagem });
+    // **1) MC Mark** – detectar intenção de MARCAR
+    if (/marque|agende|schedule/i.test(mensagem)) {
+      const data = chrono.parseDate(mensagem, new Date(), { forwardDate: true });
+      if (!data) {
+        return res
+          .status(400)
+          .json({ resposta: 'Não entendi a data/hora. Tente novamente.' });
+      }
+      // Título simples: toda a mensagem do usuário
+      const titulo = mensagem;
 
-    // 2) Busca últimas 10 mensagens
-    const { data: historico } = await supabase
-      .from('mensagens')
-      .select('papel, conteudo')
-      .eq('conversa_id', conversa_id)
-      .order('criado_em', { ascending: true })
-      .limit(10);
-
-    const contexto = historico.map((m) => ({
-      role: m.papel === 'user' ? 'user' : 'assistant',
-      content: m.conteudo,
-    }));
-
-    // 3) Prompt de sistema
-    contexto.unshift({
-      role: 'system',
-      content:
-        'Você é uma secretária virtual. Sua função é ajudar a marcar, listar, alterar e desmarcar compromissos reais do usuário, armazenados em um banco de dados. Seja clara e objetiva.',
-    });
-
-    // 4) Lista de compromissos atuais (status = marcado)
-    const { data: compromissos } = await supabase
-      .from('appointments')
-      .select('id, titulo, data_hora, status')
-      .eq('status', 'marcado')
-      .order('data_hora', { ascending: true });
-
-    const lista = compromissos.length
-      ? compromissos
-          .map(
-            (c) =>
-              `• "${c.titulo}" em ${dayjs(c.data_hora)
-                .tz(TZ)
-                .format('DD/MM/YYYY [às] HH:mm')}`
-          )
-          .join('\n')
-      : 'Nenhum compromisso marcado.';
-
-    contexto.unshift({
-      role: 'system',
-      content: `Agenda atual:\n${lista}`,
-    });
-
-    // 5) Envia ao OpenAI
-    const completion = await openai.createChatCompletion({
-      model: 'gpt-3.5-turbo',
-      temperature: 0.5,
-      messages: contexto,
-    });
-
-    const respostaTexto = completion.data.choices[0].message.content;
-
-    // 6) Salva resposta na memória
-    await supabase
-      .from('mensagens')
-      .insert({ conversa_id, papel: 'assistant', conteudo: respostaTexto });
-
-    // 7) Lógica básica de CRUD:
-    const lower = respostaTexto.toLowerCase();
-    // MARCAR
-    if (lower.includes('marcada') || lower.includes('marcado')) {
-      // extrai data/hora original com chrono
-      const dt = chrono
-        .parseDate(mensagem, new Date(), { timezone: TZ })
-        .toISOString();
-      await supabase.from('appointments').insert({
-        titulo: mensagem, // você pode ajustar para extrair só o título
-        data_hora: dt,
-        status: 'marcado',
-      });
-    }
-    // DESMARCAR
-    if (lower.includes('desmarcada') || lower.includes('cancelado')) {
-      // aqui você precisaria identificar qual compromisso — exemplo genérico:
-      const titulo = mensagem.match(/reunião com (.+?)( |$)/i)?.[1];
-      await supabase
+      // Inserir no Supabase
+      const { error: insertErr } = await supabase
         .from('appointments')
-        .update({ status: 'cancelado' })
-        .ilike('titulo', `%${titulo}%`)
-        .eq('status', 'marcado');
-    }
-    // (futuramente) ALTERAR — mesma ideia, só que update(data_hora)
+        .insert({ titulo, data_hora: dayjs(data).toISOString() });
+      if (insertErr) throw insertErr;
 
-    return res.status(200).json({ resposta: respostaTexto });
+      const fmt = dayjs(data).format('DD/MM/YYYY [às] HH:mm');
+      return res
+        .status(200)
+        .json({ resposta: `Compromisso "${titulo}" marcado para ${fmt}.` });
+    }
+
+    // **Demais intenções (list, update, delete) virão depois...**
+    return res
+      .status(200)
+      .json({ resposta: 'Ainda não consigo processar esse comando.' });
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Erro interno', details: err.message });
+    console.error('Erro no handler:', err);
+    return res.status(500).json({ erro: err.message });
   }
 }
