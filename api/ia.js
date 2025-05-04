@@ -1,71 +1,70 @@
 // api/ia.js
-import { createClient } from '@supabase/supabase-js';
-import OpenAI from 'openai';
-import * as chrono from 'chrono-node';
-import dayjs from 'dayjs';
-import utc from 'dayjs/plugin/utc.js';
-import timezone from 'dayjs/plugin/timezone.js';
 
+// 1) Força o Node a usar o fuso de São Paulo
+process.env.TZ = 'America/Sao_Paulo';
+
+import { createClient }    from '@supabase/supabase-js';
+import * as chrono         from 'chrono-node';
+import dayjs               from 'dayjs';
+import utc                 from 'dayjs/plugin/utc.js';
+import timezone            from 'dayjs/plugin/timezone.js';
+
+// 2) Configura o Day.js para sempre usar America/Sao_Paulo
 dayjs.extend(utc);
 dayjs.extend(timezone);
+dayjs.tz.setDefault('America/Sao_Paulo');
 
-// — Variáveis de ambiente —
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_KEY;
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const TZ = process.env.TIMEZONE || 'America/Sao_Paulo';
-
-if (!SUPABASE_URL || !SUPABASE_KEY) {
-  throw new Error('❌ SUPABASE_URL e SUPABASE_KEY são obrigatórios.');
-}
-if (!OPENAI_API_KEY) {
-  throw new Error('❌ OPENAI_API_KEY é obrigatório.');
-}
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+// 3) Constrói o cliente Supabase
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY
+);
 
 export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ erro: 'Método não permitido' });
+  }
+
+  const { mensagem } = req.body || {};
+  if (!mensagem) {
+    return res.status(400).json({ erro: 'Envie { "mensagem": "..."} no body.' });
+  }
+
   try {
-    const { mensagem } = req.body;
-    // --- USO DO OPENAI PARA PARSER ---
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: 'Você é uma assistente que recebe pedidos como "marque reunião…" e extrai título e data/hora.' },
-        { role: 'user', content: mensagem }
-      ],
-      functions: [{
-        name: 'schedule',
-        description: 'Agenda um compromisso',
-        parameters: {
-          type: 'object',
-          properties: {
-            title: { type: 'string', description: 'Título do compromisso' },
-            datetime: { type: 'string', description: 'Timestamp ISO no fuso local' }
-          },
-          required: ['title', 'datetime']
-        }
-      }],
-      function_call: { name: 'schedule' }
-    });
+    // 4) Parseia a data/hora em linguagem natural
+    const parsed = chrono.parse(mensagem, new Date(), { timezone: 'America/Sao_Paulo' })[0];
+    if (!parsed || !parsed.start) {
+      return res
+        .status(400)
+        .json({ resposta: 'Não entendi a data/hora. Pode reformular?' });
+    }
+    const data = parsed.start.date();
 
-    const fnCall = completion.choices[0].message.function_call;
-    const { title, datetime } = JSON.parse(fnCall.arguments);
+    // 5) Extrai o título com uma heurística simples:
+    //    tira do texto a parte reconhecida como data e as palavras iniciais de agendamento.
+    let titulo = mensagem
+      .replace(parsed.text, '')
+      .replace(/^(Marque|Agende|Reserve)\s*/i, '')
+      .trim();
+    if (!titulo) titulo = 'Compromisso';
 
-    // --- INSERÇÃO NO SUPABASE ---
-    const { error: supErr } = await supabase
+    // 6) Insere no Supabase (table "appointments" com colunas: titulo text, data_hora timestamp)
+    const { error } = await supabase
       .from('appointments')
-      .insert([{ titulo: title, data_hora: datetime }]);
+      .insert({ titulo, data_hora: dayjs(data).toISOString() });
 
-    if (supErr) throw supErr;
+    if (error) {
+      console.error('Supabase insert error:', error);
+      throw error;
+    }
 
-    // --- FORMATAÇÃO DA RESPOSTA ---
-    const fmt = dayjs.utc(datetime).tz(TZ).format('DD/MM/YYYY [às] HH:mm');
-    return res.status(200).json({ resposta: `Compromisso "${title}" marcado para ${fmt}.` });
-
+    // 7) Formata a data de volta em PT-BR
+    const fmt = dayjs(data).format('DD/MM/YYYY [às] HH:mm');
+    return res
+      .status(200)
+      .json({ resposta: `Compromisso "${titulo}" marcado para ${fmt}.` });
   } catch (err) {
-    console.error(err);
+    console.error('Erro no handler:', err);
     return res.status(500).json({ erro: err.message });
   }
 }
