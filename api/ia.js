@@ -31,7 +31,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Campo "mensagem" é obrigatório.' });
     }
 
-    // parsing de data/hora
+    // parse de data/hora
     const agora   = dayjs().tz(defaultTimezone).toDate();
     const results = pt.parse(mensagem, agora, { forwardDate: true });
     if (!results.length) {
@@ -39,17 +39,16 @@ export default async function handler(req, res) {
     }
 
     const result  = results[0];
-    const start   = result.start;
-    let when      = start.date();
+    const when    = result.start.date();
 
-    // se minuto não foi especificado (implícito), zera para :00
-    if (!start.isCertain('minute')) {
+    // se minuto não foi especificado, zera para :00
+    if (!result.start.isCertain('minute')) {
       when.setMinutes(0, 0, 0);
     }
 
     const textoDataHora = result.text;
 
-    // extrai título (remove data/hora e verbos iniciais)
+    // extração de título
     let titulo = mensagem
       .replace(textoDataHora, '')
       .replace(/^(Marque|Agende|Criar|Adicionar|Lembrete)\s+/i, '')
@@ -60,20 +59,15 @@ export default async function handler(req, res) {
     // insere no Supabase
     const { data: insertData, error: insertError } = await supabase
       .from('appointments')
-      .insert([{
-        titulo,
-        data_hora: when.toISOString(),
-        status: 'marcado'
-      }])
+      .insert([{ titulo, data_hora: when.toISOString(), status: 'marcado' }])
       .select()
       .single();
-
     if (insertError) {
       console.error('Erro ao inserir:', insertError);
       return res.status(500).json({ error: 'Erro ao salvar compromisso.' });
     }
 
-    // formata data para retorno
+    // formata para resposta
     const dataHoraFormatada = dayjs(when)
       .tz(defaultTimezone)
       .format('DD/MM/YYYY [às] HH:mm');
@@ -84,7 +78,6 @@ export default async function handler(req, res) {
       titulo: insertData.titulo,
       data_hora: dataHoraFormatada
     });
-
   } catch (error) {
     console.error('Erro na API:', error);
     if (error instanceof SyntaxError && error.message.includes('JSON')) {
