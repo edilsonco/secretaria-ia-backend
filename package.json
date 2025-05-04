@@ -4,12 +4,7 @@
   "type": "module",
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",
-    "openai": "^4.25.0",
     "chrono-node": "^2.3.0",
     "dayjs": "^1.11.10"
-  },
-  "scripts": {
-    "dev": "vercel dev",
-    "start": "vercel dev"
   }
 }
