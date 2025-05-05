@@ -60,7 +60,7 @@ export default async function handler(req, res) {
       if (hour < 12 && mensagem.toLowerCase().includes('pm')) hour += 12; // Ajuste para PM
       if (hour > 23) hour = hour % 24; // Normaliza horas acima de 23
     } else {
-      // Fallback para o chrono-node se não encontrar a hora
+      console.log('Hora não encontrada por regex, usando fallback chrono-node:', parsedDate.start.get('hour'), parsedDate.start.get('minute'));
       hour = parsedDate.start.get('hour');
       minute = parsedDate.start.get('minute') || 0;
     }
