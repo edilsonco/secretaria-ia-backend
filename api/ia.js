@@ -48,10 +48,17 @@ export default async function handler(req, res) {
     const parsedDate = parsed[0];
     let targetDate = dayjs(referenceDate).tz(TIMEZONE, true);
 
-    // Ajuste manual para variações de "hoje", "amanhã", "depois de amanhã", "semana que vem", dias da semana, dia do mês, "daqui a X dias" e "no próximo mês"
+    // Ajuste manual para variações de "hoje", "amanhã", "depois de amanhã", "semana que vem", dias da semana, dia do mês, "daqui a X dias", "no próximo mês" e "no próximo ano"
     const lowerMessage = mensagem.toLowerCase();
     let dateAdjusted = false;
     let nextMonthDetected = false;
+    let nextYearDetected = false;
+
+    // Verificar "no próximo ano"
+    if (lowerMessage.includes('no próximo ano') || lowerMessage.includes('no proximo ano') || lowerMessage.includes('próximo ano') || lowerMessage.includes('proximo ano')) {
+      nextYearDetected = true;
+      console.log('Detectado "no próximo ano"');
+    }
 
     // Verificar "no próximo mês"
     if (lowerMessage.includes('no próximo mês') || lowerMessage.includes('no proximo mes') || lowerMessage.includes('próximo mês') || lowerMessage.includes('proximo mes')) {
@@ -67,7 +74,14 @@ export default async function handler(req, res) {
         const currentDay = targetDate.date();
         const currentMonth = targetDate.month();
         const currentYear = targetDate.year();
-        if (nextMonthDetected) {
+        if (nextYearDetected) {
+          // Se "no próximo ano" foi detectado, ajusta para o próximo ano com o dia especificado
+          targetDate = targetDate.year(currentYear + 1).month(currentMonth).date(dayOfMonth);
+          // Ajustar se o dia não existir no próximo ano (ex.: 29/02 em ano não bissexto)
+          if (targetDate.date() !== dayOfMonth) {
+            targetDate = targetDate.endOf('month');
+          }
+        } else if (nextMonthDetected) {
           // Se "no próximo mês" foi detectado, ajusta para o próximo mês com o dia especificado
           targetDate = targetDate.month(currentMonth + 1).date(dayOfMonth);
           // Ajustar se o dia não existir no próximo mês (ex.: 31 em fevereiro)
@@ -105,7 +119,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // Verificar "no próximo mês" com dia da semana (ex.: "segunda-feira no próximo mês")
+    // Verificar "no próximo ano" ou "no próximo mês" com dia da semana (ex.: "segunda-feira no próximo ano")
     let targetDayOfWeek = -1;
     let isNextWeekDay = false;
     let isWeekAfter = false;
@@ -130,7 +144,23 @@ export default async function handler(req, res) {
     if (targetDayOfWeek !== -1 && !dateAdjusted) {
       const currentDayOfWeek = targetDate.day();
       let daysToAdd;
-      if (nextMonthDetected) {
+      if (nextYearDetected) {
+        // Ajusta para o próximo ano primeiro
+        const currentMonth = targetDate.month();
+        const currentYear = targetDate.year();
+        targetDate = targetDate.year(currentYear + 1).month(currentMonth).date(1);
+        // Encontra a primeira ocorrência do dia da semana no mesmo dia/mês do próximo ano
+        const firstDayOfNextYearMonth = targetDate.day();
+        daysToAdd = targetDayOfWeek - firstDayOfNextYearMonth;
+        if (daysToAdd < 0) {
+          daysToAdd += 7;
+        }
+        targetDate = targetDate.add(daysToAdd, 'day');
+        // Ajustar se o dia não existir (ex.: 29/02 em ano não bissexto)
+        if (targetDate.date() !== targetDate.date()) {
+          targetDate = targetDate.endOf('month');
+        }
+      } else if (nextMonthDetected) {
         // Ajusta para o próximo mês primeiro
         const currentMonth = targetDate.month();
         const currentYear = targetDate.year();
@@ -145,6 +175,10 @@ export default async function handler(req, res) {
           daysToAdd += 7;
         }
         targetDate = targetDate.add(daysToAdd, 'day');
+        // Ajustar se o dia não existir no próximo mês (ex.: 31 em fevereiro)
+        if (targetDate.date() !== targetDate.date()) {
+          targetDate = targetDate.endOf('month');
+        }
       } else if (isWeekAfter) {
         targetDate = targetDate.add(7, 'day');
         const newCurrentDayOfWeek = targetDate.day();
@@ -192,6 +226,20 @@ export default async function handler(req, res) {
       dateAdjusted = true;
     }
 
+    // Verificar "no próximo ano" (sem dia ou dia da semana específico)
+    if (nextYearDetected && !dateAdjusted) {
+      const currentDay = targetDate.date();
+      const currentMonth = targetDate.month();
+      const currentYear = targetDate.year();
+      targetDate = targetDate.year(currentYear + 1).month(currentMonth).date(currentDay);
+      // Ajustar se o dia não existir no próximo ano (ex.: 29/02 em ano não bissexto)
+      if (targetDate.date() !== currentDay) {
+        targetDate = targetDate.endOf('month');
+      }
+      console.log(`Detectado "no próximo ano" (sem dia específico), ajustado para ${targetDate.format('DD/MM/YYYY')}`);
+      dateAdjusted = true;
+    }
+
     if (lowerMessage.includes('hoje') && !dateAdjusted) {
       console.log('Detectado "hoje", mantendo a data atual');
       dateAdjusted = true;
@@ -234,7 +282,7 @@ export default async function handler(req, res) {
     // Converta para Date para o Supabase
     const dataHora = targetDate.toDate();
 
-    // Extraia o título removendo a data/hora, verbos, "hoje/amanhã/depois de amanhã", "semana que vem", dias da semana, "dia X", "daqui a X dias" e "no próximo mês"
+    // Extraia o título removendo a data/hora, verbos, "hoje/amanhã/depois de amanhã", "semana que vem", dias da semana, "dia X", "daqui a X dias", "no próximo mês" e "no próximo ano"
     let title = mensagem;
     title = title.replace(/\d{2}\/\d{2}\/\d{4}/gi, '').replace(/às\s*\d{1,2}(?::\d{2})?(?:\s*h)?/gi, '').replace(/às/gi, '').trim();
     title = title.replace(/hoje|amanha|amanhã|depois de amanha|depois de amanhã|semana que vem|próxima semana|proxima semana/gi, '').trim();
@@ -248,6 +296,8 @@ export default async function handler(req, res) {
     title = title.replace(/daqui\s+a\s+\d{1,2}\s+dias/gi, '').trim();
     // Remove "no próximo mês"
     title = title.replace(/no\s+próximo\s+mês|no\s+proximo\s+mes|próximo\s+mês|proximo\s+mes/gi, '').trim();
+    // Remove "no próximo ano"
+    title = title.replace(/no\s+próximo\s+ano|no\s+proximo\s+ano|próximo\s+ano|proximo\s+ano/gi, '').trim();
     title = title.replace(/Compromisso marcado:/gi, '').trim();
     const verbs = ['marque', 'marca', 'anote', 'anota', 'agende', 'agenda'];
     for (const verb of verbs) {
