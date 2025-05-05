@@ -42,15 +42,19 @@ export default async function handler(req, res) {
     if (dateMatch) {
       const [day, month, year] = dateMatch[0].split('/');
       targetDate = targetDate.year(parseInt(year)).month(parseInt(month) - 1).date(parseInt(day));
+    } else if (mensagem.toLowerCase().includes('amanhã')) {
+      targetDate = targetDate.add(1, 'day');
     }
 
-    // Extraia a hora manualmente usando regex
-    const timeMatch = mensagem.match(/às\s*(\d{1,2}):(\d{2})/);
+    // Extraia a hora manualmente usando regex (aceitando "às HHh" ou "às HH:MM")
+    const timeMatch = mensagem.match(/às\s*(\d{1,2})(?::(\d{2}))?h?/);
     let hour = 0;
     let minute = 0;
     if (timeMatch) {
       hour = parseInt(timeMatch[1], 10);
-      minute = parseInt(timeMatch[2], 10);
+      minute = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
+      if (hour === 12 && mensagem.toLowerCase().includes('am')) hour = 0; // Ajuste para AM
+      if (hour < 12 && mensagem.toLowerCase().includes('pm')) hour += 12; // Ajuste para PM
     } else {
       // Fallback para o chrono-node se não encontrar a hora
       hour = parsedDate.start.get('hour');
@@ -63,16 +67,17 @@ export default async function handler(req, res) {
     // Converta para Date para o Supabase
     const dataHora = targetDate.toDate();
 
-    // Extraia o título removendo a data/hora e verbos como "Marque", "Agende" e "Compromisso marcado"
+    // Extraia o título removendo a data/hora, verbos e "amanhã"
     let title = mensagem;
     if (parsedDate.text) {
       title = title.replace(parsedDate.text, '').trim();
     }
     title = title.replace(/\d{2}\/\d{2}\/\d{4}/gi, '').replace(/às\s*\d{1,2}(:\d{2})?h?/gi, '').replace(/às/gi, '').trim();
+    title = title.replace(/amanhã/gi, '').trim();
     title = title.replace(/Compromisso marcado:/gi, '').trim();
-    const verbs = ['Marque', 'Agende'];
+    const verbs = ['marque', 'agende'];
     for (const verb of verbs) {
-      if (title.startsWith(verb + ' ')) {
+      if (title.toLowerCase().startsWith(verb + ' ')) {
         title = title.substring(verb.length + 1).trim();
         break;
       }
