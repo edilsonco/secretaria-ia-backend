@@ -35,19 +35,22 @@ export default async function handler(req, res) {
 
     // Use o primeiro resultado de parsing para a data
     const parsedDate = parsed[0];
-    let targetDate = dayjs(parsedDate.start.date()).tz(TIMEZONE, true);
+    let targetDate = dayjs(referenceDate).tz(TIMEZONE, true);
+
+    // Ajuste manual para "amanhã"
+    if (mensagem.toLowerCase().includes('amanhã')) {
+      targetDate = targetDate.add(1, 'day');
+    }
 
     // Ajuste manual se a data específica estiver na mensagem
     const dateMatch = mensagem.match(/\d{2}\/\d{2}\/\d{4}/);
     if (dateMatch) {
       const [day, month, year] = dateMatch[0].split('/');
       targetDate = targetDate.year(parseInt(year)).month(parseInt(month) - 1).date(parseInt(day));
-    } else if (mensagem.toLowerCase().includes('amanhã')) {
-      targetDate = targetDate.add(1, 'day');
     }
 
     // Extraia a hora manualmente usando regex (aceitando "às HHh" ou "às HH:MM")
-    const timeMatch = mensagem.match(/às\s*(\d{1,2})(?::(\d{2}))?h?/);
+    const timeMatch = mensagem.match(/às\s*(\d{1,2})(?::(\d{2}))?h?/i);
     let hour = 0;
     let minute = 0;
     if (timeMatch) {
@@ -55,6 +58,7 @@ export default async function handler(req, res) {
       minute = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
       if (hour === 12 && mensagem.toLowerCase().includes('am')) hour = 0; // Ajuste para AM
       if (hour < 12 && mensagem.toLowerCase().includes('pm')) hour += 12; // Ajuste para PM
+      if (hour > 23) hour = hour % 24; // Normaliza horas acima de 23
     } else {
       // Fallback para o chrono-node se não encontrar a hora
       hour = parsedDate.start.get('hour');
@@ -69,9 +73,6 @@ export default async function handler(req, res) {
 
     // Extraia o título removendo a data/hora, verbos e "amanhã"
     let title = mensagem;
-    if (parsedDate.text) {
-      title = title.replace(parsedDate.text, '').trim();
-    }
     title = title.replace(/\d{2}\/\d{2}\/\d{4}/gi, '').replace(/às\s*\d{1,2}(:\d{2})?h?/gi, '').replace(/às/gi, '').trim();
     title = title.replace(/amanhã/gi, '').trim();
     title = title.replace(/Compromisso marcado:/gi, '').trim();
@@ -82,6 +83,7 @@ export default async function handler(req, res) {
         break;
       }
     }
+    title = title.replace(/^\s*uma?\s+/i, '').trim(); // Remove "uma" ou "um" no início
 
     // Insira o registro no Supabase
     const { data, error } = await supabase
