@@ -48,9 +48,31 @@ export default async function handler(req, res) {
     const parsedDate = parsed[0];
     let targetDate = dayjs(referenceDate).tz(TIMEZONE, true);
 
-    // Ajuste manual para variações de "hoje", "amanhã", "depois de amanhã", "semana que vem" e dias da semana
+    // Ajuste manual para variações de "hoje", "amanhã", "depois de amanhã", "semana que vem", dias da semana e dia do mês
     const lowerMessage = mensagem.toLowerCase();
     let dateAdjusted = false;
+
+    // Verificar "dia X" (ex.: dia 24)
+    const dayMatch = lowerMessage.match(/dia\s+(\d{1,2})/);
+    if (dayMatch) {
+      const dayOfMonth = parseInt(dayMatch[1], 10);
+      if (dayOfMonth >= 1 && dayOfMonth <= 31) {
+        const currentDay = targetDate.date();
+        const currentMonth = targetDate.month();
+        const currentYear = targetDate.year();
+        if (dayOfMonth >= currentDay) {
+          targetDate = targetDate.date(dayOfMonth);
+        } else {
+          // Se o dia já passou no mês atual, usa o próximo mês
+          targetDate = targetDate.month(currentMonth + 1).date(dayOfMonth);
+          if (targetDate.month() < currentMonth) {
+            targetDate = targetDate.year(currentYear + 1).month(currentMonth + 1).date(dayOfMonth);
+          }
+        }
+        console.log(`Detectado "dia ${dayOfMonth}", ajustado para ${targetDate.format('DD/MM/YYYY')}`);
+        dateAdjusted = true;
+      }
+    }
 
     // Verificar "semana que vem" ou "próxima semana" (sem dia da semana específico)
     if ((lowerMessage.includes('semana que vem') || lowerMessage.includes('próxima semana') || lowerMessage.includes('proxima semana')) &&
@@ -145,7 +167,7 @@ export default async function handler(req, res) {
     // Converta para Date para o Supabase
     const dataHora = targetDate.toDate();
 
-    // Extraia o título removendo a data/hora, verbos, "hoje/amanhã/depois de amanhã", "semana que vem" e dias da semana
+    // Extraia o título removendo a data/hora, verbos, "hoje/amanhã/depois de amanhã", "semana que vem", dias da semana e preposições
     let title = mensagem;
     title = title.replace(/\d{2}\/\d{2}\/\d{4}/gi, '').replace(/às\s*\d{1,2}(?::\d{2})?(?:\s*h)?/gi, '').replace(/às/gi, '').trim();
     title = title.replace(/hoje|amanha|amanhã|depois de amanha|depois de amanhã|semana que vem|próxima semana|proxima semana/gi, '').trim();
@@ -153,6 +175,8 @@ export default async function handler(req, res) {
     for (const dayName of Object.keys(daysOfWeek)) {
       title = title.replace(new RegExp(`próxima ${dayName}|proxima ${dayName}|${dayName} da semana que vem|${dayName} da próxima semana|${dayName} da proxima semana|${dayName}`, 'gi'), '').trim();
     }
+    // Remove "dia" e o número associado
+    title = title.replace(/dia\s+\d{1,2}/gi, '').trim();
     title = title.replace(/Compromisso marcado:/gi, '').trim();
     const verbs = ['marque', 'marca', 'anote', 'anota', 'agende', 'agenda'];
     for (const verb of verbs) {
@@ -162,10 +186,8 @@ export default async function handler(req, res) {
       }
     }
     title = title.replace(/^\s*uma?\s+/i, '').trim(); // Remove "uma" ou "um" no início
-    console.log('Título antes de remover "da" e "de":', title);
     // Remove preposições "da" e "de" (em qualquer posição, com ou sem espaços)
     title = title.replace(/\b(da|de)\b/gi, '').replace(/\s+/g, ' ').trim();
-    console.log('Título depois de remover "da" e "de":', title);
 
     // Insira o registro no Supabase
     const { data, error } = await supabase
