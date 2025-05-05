@@ -48,7 +48,7 @@ export default async function handler(req, res) {
     const parsedDate = parsed[0];
     let targetDate = dayjs(referenceDate).tz(TIMEZONE, true);
 
-    // Ajuste manual para variações de "hoje", "amanhã", "depois de amanhã", "semana que vem", dias da semana e dia do mês
+    // Ajuste manual para variações de "hoje", "amanhã", "depois de amanhã", "semana que vem", dias da semana, dia do mês e "daqui a X dias"
     const lowerMessage = mensagem.toLowerCase();
     let dateAdjusted = false;
 
@@ -71,12 +71,24 @@ export default async function handler(req, res) {
         }
         console.log(`Detectado "dia ${dayOfMonth}", ajustado para ${targetDate.format('DD/MM/YYYY')}`);
         dateAdjusted = true;
+    }
+    }
+
+    // Verificar "daqui a X dias"
+    const daquiMatch = lowerMessage.match(/daqui\s+a\s+(\d{1,2})\s+dias/);
+    if (daquiMatch && !dateAdjusted) {
+      const daysToAdd = parseInt(daquiMatch[1], 10);
+      if (daysToAdd >= 1) {
+        targetDate = targetDate.add(daysToAdd, 'day');
+        console.log(`Detectado "daqui a ${daysToAdd} dias", ajustado para ${targetDate.format('DD/MM/YYYY')}`);
+        dateAdjusted = true;
       }
     }
 
     // Verificar "semana que vem" ou "próxima semana" (sem dia da semana específico)
     if ((lowerMessage.includes('semana que vem') || lowerMessage.includes('próxima semana') || lowerMessage.includes('proxima semana')) &&
-        !Object.keys(daysOfWeek).some(day => lowerMessage.includes(day + ' da semana que vem') || lowerMessage.includes(day + ' da próxima semana') || lowerMessage.includes(day + ' da proxima semana'))) {
+        !Object.keys(daysOfWeek).some(day => lowerMessage.includes(day + ' da semana que vem') || lowerMessage.includes(day + ' da próxima semana') || lowerMessage.includes(day + ' da proxima semana')) &&
+        !dateAdjusted) {
       console.log('Detectado "semana que vem" (sem dia específico), adicionando 7 dias');
       targetDate = targetDate.add(7, 'day');
       dateAdjusted = true;
@@ -104,7 +116,7 @@ export default async function handler(req, res) {
       }
     }
 
-    if (targetDayOfWeek !== -1) {
+    if (targetDayOfWeek !== -1 && !dateAdjusted) {
       const currentDayOfWeek = targetDate.day(); // 0 = domingo, 1 = segunda, ..., 6 = sábado
       let daysToAdd = targetDayOfWeek - currentDayOfWeek;
       if (isWeekAfter) {
@@ -124,15 +136,15 @@ export default async function handler(req, res) {
       }
       targetDate = targetDate.add(daysToAdd, 'day');
       dateAdjusted = true;
-    } else if (lowerMessage.includes('hoje')) {
+    } else if (lowerMessage.includes('hoje') && !dateAdjusted) {
       console.log('Detectado "hoje", mantendo a data atual');
       // Não adiciona dias, mantém a data atual
       dateAdjusted = true;
-    } else if (lowerMessage.includes('depois de amanha') || lowerMessage.includes('depois de amanhã')) {
+    } else if ((lowerMessage.includes('depois de amanha') || lowerMessage.includes('depois de amanhã')) && !dateAdjusted) {
       console.log('Detectado "depois de amanhã", adicionando 2 dias');
       targetDate = targetDate.add(2, 'day');
       dateAdjusted = true;
-    } else if (lowerMessage.includes('amanha') || lowerMessage.includes('amanhã')) {
+    } else if ((lowerMessage.includes('amanha') || lowerMessage.includes('amanhã')) && !dateAdjusted) {
       console.log('Detectado "amanhã", adicionando 1 dia');
       targetDate = targetDate.add(1, 'day');
       dateAdjusted = true;
@@ -167,7 +179,7 @@ export default async function handler(req, res) {
     // Converta para Date para o Supabase
     const dataHora = targetDate.toDate();
 
-    // Extraia o título removendo a data/hora, verbos, "hoje/amanhã/depois de amanhã", "semana que vem", dias da semana e preposições
+    // Extraia o título removendo a data/hora, verbos, "hoje/amanhã/depois de amanhã", "semana que vem", dias da semana, "dia X" e "daqui a X dias"
     let title = mensagem;
     title = title.replace(/\d{2}\/\d{2}\/\d{4}/gi, '').replace(/às\s*\d{1,2}(?::\d{2})?(?:\s*h)?/gi, '').replace(/às/gi, '').trim();
     title = title.replace(/hoje|amanha|amanhã|depois de amanha|depois de amanhã|semana que vem|próxima semana|proxima semana/gi, '').trim();
@@ -177,6 +189,8 @@ export default async function handler(req, res) {
     }
     // Remove "dia" e o número associado
     title = title.replace(/dia\s+\d{1,2}/gi, '').trim();
+    // Remove "daqui a X dias"
+    title = title.replace(/daqui\s+a\s+\d{1,2}\s+dias/gi, '').trim();
     title = title.replace(/Compromisso marcado:/gi, '').trim();
     const verbs = ['marque', 'marca', 'anote', 'anota', 'agende', 'agenda'];
     for (const verb of verbs) {
