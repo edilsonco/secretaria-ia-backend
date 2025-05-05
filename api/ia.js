@@ -28,36 +28,35 @@ export default async function handler(req, res) {
     const referenceDate = dayjs().tz(TIMEZONE).toDate();
 
     // Parseie a mensagem com chrono-node, forçando a interpretação como hora local
-    const parsed = chrono.parse(mensagem, referenceDate, { forwardDate: true });
+    const parsed = chrono.parse(mensagem, referenceDate, { forwardDate: true, timezones: [TIMEZONE] });
     if (parsed.length === 0) {
       return res.status(400).json({ error: 'Nenhuma data/hora encontrada na mensagem' });
     }
 
     // Use o primeiro resultado de parsing
     const parsedDate = parsed[0];
-    const hour = parsedDate.start.get('hour');
-    const minute = parsedDate.start.get('minute') || 0;
+    let targetDate = dayjs(parsedDate.start.date()).tz(TIMEZONE, true);
 
-    // Construa a data manualmente, tratando a hora como local
-    let targetDate = dayjs(referenceDate).tz(TIMEZONE).startOf('day');
-
-    // Verifique "amanhã" diretamente na mensagem original
-    if (mensagem.toLowerCase().includes('amanhã')) {
-      targetDate = targetDate.add(1, 'day');
+    // Ajuste manual se a data específica estiver na mensagem
+    const dateMatch = mensagem.match(/\d{2}\/\d{2}\/\d{4}/);
+    if (dateMatch) {
+      const [day, month, year] = dateMatch[0].split('/');
+      targetDate = targetDate.year(parseInt(year)).month(parseInt(month) - 1).date(parseInt(day));
     }
 
     // Aplique a hora e minuto parseados
-    targetDate = targetDate.hour(hour).minute(minute).second(0).tz(TIMEZONE, true);
+    targetDate = targetDate.hour(parsedDate.start.get('hour')).minute(parsedDate.start.get('minute') || 0).second(0);
 
     // Converta para Date para o Supabase
     const dataHora = targetDate.toDate();
 
-    // Extraia o título removendo a data/hora e verbos como "Marque", "Agende"
+    // Extraia o título removendo a data/hora e verbos como "Marque", "Agende" e "Compromisso marcado"
     let title = mensagem;
     if (parsedDate.text) {
       title = title.replace(parsedDate.text, '').trim();
     }
-    title = title.replace(/amanhã/gi, '').replace(/às\s*\d{1,2}(:\d{2})?h?/gi, '').replace(/às/gi, '').trim();
+    title = title.replace(/\d{2}\/\d{2}\/\d{4}/gi, '').replace(/às\s*\d{1,2}(:\d{2})?h?/gi, '').replace(/às/gi, '').trim();
+    title = title.replace(/Compromisso marcado:/gi, '').trim();
     const verbs = ['Marque', 'Agende'];
     for (const verb of verbs) {
       if (title.startsWith(verb + ' ')) {
