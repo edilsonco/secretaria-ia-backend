@@ -48,9 +48,16 @@ export default async function handler(req, res) {
     const parsedDate = parsed[0];
     let targetDate = dayjs(referenceDate).tz(TIMEZONE, true);
 
-    // Ajuste manual para variações de "hoje", "amanhã", "depois de amanhã", "semana que vem", dias da semana, dia do mês e "daqui a X dias"
+    // Ajuste manual para variações de "hoje", "amanhã", "depois de amanhã", "semana que vem", dias da semana, dia do mês, "daqui a X dias" e "no próximo mês"
     const lowerMessage = mensagem.toLowerCase();
     let dateAdjusted = false;
+    let nextMonthDetected = false;
+
+    // Verificar "no próximo mês"
+    if (lowerMessage.includes('no próximo mês') || lowerMessage.includes('no proximo mes') || lowerMessage.includes('próximo mês') || lowerMessage.includes('proximo mes')) {
+      nextMonthDetected = true;
+      console.log('Detectado "no próximo mês"');
+    }
 
     // Verificar "dia X" (ex.: dia 24)
     const dayMatch = lowerMessage.match(/dia\s+(\d{1,2})/);
@@ -60,18 +67,31 @@ export default async function handler(req, res) {
         const currentDay = targetDate.date();
         const currentMonth = targetDate.month();
         const currentYear = targetDate.year();
-        if (dayOfMonth >= currentDay) {
-          targetDate = targetDate.date(dayOfMonth);
-        } else {
-          // Se o dia já passou no mês atual, usa o próximo mês
+        if (nextMonthDetected) {
+          // Se "no próximo mês" foi detectado, ajusta para o próximo mês com o dia especificado
           targetDate = targetDate.month(currentMonth + 1).date(dayOfMonth);
+          // Ajustar se o dia não existir no próximo mês (ex.: 31 em fevereiro)
+          if (targetDate.date() !== dayOfMonth) {
+            targetDate = targetDate.endOf('month');
+          }
+          // Ajustar o ano se necessário (ex.: de dezembro para janeiro)
           if (targetDate.month() < currentMonth) {
-            targetDate = targetDate.year(currentYear + 1).month(currentMonth + 1).date(dayOfMonth);
+            targetDate = targetDate.year(currentYear + 1);
+          }
+        } else {
+          // Caso contrário, ajusta no mês atual ou próximo mês
+          if (dayOfMonth >= currentDay) {
+            targetDate = targetDate.date(dayOfMonth);
+          } else {
+            targetDate = targetDate.month(currentMonth + 1).date(dayOfMonth);
+            if (targetDate.month() < currentMonth) {
+              targetDate = targetDate.year(currentYear + 1).month(currentMonth + 1).date(dayOfMonth);
+            }
           }
         }
         console.log(`Detectado "dia ${dayOfMonth}", ajustado para ${targetDate.format('DD/MM/YYYY')}`);
         dateAdjusted = true;
-    }
+      }
     }
 
     // Verificar "daqui a X dias"
@@ -85,16 +105,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // Verificar "semana que vem" ou "próxima semana" (sem dia da semana específico)
-    if ((lowerMessage.includes('semana que vem') || lowerMessage.includes('próxima semana') || lowerMessage.includes('proxima semana')) &&
-        !Object.keys(daysOfWeek).some(day => lowerMessage.includes(day + ' da semana que vem') || lowerMessage.includes(day + ' da próxima semana') || lowerMessage.includes(day + ' da proxima semana')) &&
-        !dateAdjusted) {
-      console.log('Detectado "semana que vem" (sem dia específico), adicionando 7 dias');
-      targetDate = targetDate.add(7, 'day');
-      dateAdjusted = true;
-    }
-
-    // Verificar dias da semana (com ou sem "próxima" ou "da semana que vem")
+    // Verificar "no próximo mês" com dia da semana (ex.: "segunda-feira no próximo mês")
     let targetDayOfWeek = -1;
     let isNextWeekDay = false;
     let isWeekAfter = false;
@@ -117,28 +128,72 @@ export default async function handler(req, res) {
     }
 
     if (targetDayOfWeek !== -1 && !dateAdjusted) {
-      const currentDayOfWeek = targetDate.day(); // 0 = domingo, 1 = segunda, ..., 6 = sábado
-      let daysToAdd = targetDayOfWeek - currentDayOfWeek;
-      if (isWeekAfter) {
-        // Se for "segunda-feira da semana que vem", primeiro adiciona 7 dias, depois ajusta para o dia da semana
+      const currentDayOfWeek = targetDate.day();
+      let daysToAdd;
+      if (nextMonthDetected) {
+        // Ajusta para o próximo mês primeiro
+        const currentMonth = targetDate.month();
+        const currentYear = targetDate.year();
+        targetDate = targetDate.month(currentMonth + 1).date(1);
+        if (targetDate.month() < currentMonth) {
+          targetDate = targetDate.year(currentYear + 1);
+        }
+        // Encontra a primeira ocorrência do dia da semana no próximo mês
+        const firstDayOfNextMonth = targetDate.day();
+        daysToAdd = targetDayOfWeek - firstDayOfNextMonth;
+        if (daysToAdd < 0) {
+          daysToAdd += 7;
+        }
+        targetDate = targetDate.add(daysToAdd, 'day');
+      } else if (isWeekAfter) {
         targetDate = targetDate.add(7, 'day');
         const newCurrentDayOfWeek = targetDate.day();
         daysToAdd = targetDayOfWeek - newCurrentDayOfWeek;
-        // Se o dia da semana for o mesmo que o dia atual (ex.: hoje é segunda e pedimos "segunda-feira da semana que vem"),
-        // não precisa ajustar mais, pois já adicionamos 7 dias
         if (targetDayOfWeek === currentDayOfWeek) {
           daysToAdd = 0;
         } else if (daysToAdd < 0) {
-          daysToAdd += 7; // Garante que seja o dia da semana correto na próxima semana
+          daysToAdd += 7;
         }
-      } else if (daysToAdd <= 0 || isNextWeekDay) {
-        daysToAdd += 7; // Garante que seja a próxima ocorrência do dia
+        targetDate = targetDate.add(daysToAdd, 'day');
+      } else {
+        daysToAdd = targetDayOfWeek - currentDayOfWeek;
+        if (daysToAdd <= 0 || isNextWeekDay) {
+          daysToAdd += 7;
+        }
+        targetDate = targetDate.add(daysToAdd, 'day');
       }
-      targetDate = targetDate.add(daysToAdd, 'day');
       dateAdjusted = true;
-    } else if (lowerMessage.includes('hoje') && !dateAdjusted) {
+    }
+
+    // Verificar "semana que vem" ou "próxima semana" (sem dia da semana específico)
+    if ((lowerMessage.includes('semana que vem') || lowerMessage.includes('próxima semana') || lowerMessage.includes('proxima semana')) &&
+        !Object.keys(daysOfWeek).some(day => lowerMessage.includes(day + ' da semana que vem') || lowerMessage.includes(day + ' da próxima semana') || lowerMessage.includes(day + ' da proxima semana')) &&
+        !dateAdjusted) {
+      console.log('Detectado "semana que vem" (sem dia específico), adicionando 7 dias');
+      targetDate = targetDate.add(7, 'day');
+      dateAdjusted = true;
+    }
+
+    // Verificar "no próximo mês" (sem dia ou dia da semana específico)
+    if (nextMonthDetected && !dateAdjusted) {
+      const currentDay = targetDate.date();
+      const currentMonth = targetDate.month();
+      const currentYear = targetDate.year();
+      targetDate = targetDate.month(currentMonth + 1).date(currentDay);
+      // Ajustar se o dia não existir no próximo mês (ex.: 31 em fevereiro)
+      if (targetDate.date() !== currentDay) {
+        targetDate = targetDate.endOf('month');
+      }
+      // Ajustar o ano se necessário (ex.: de dezembro para janeiro)
+      if (targetDate.month() < currentMonth) {
+        targetDate = targetDate.year(currentYear + 1);
+      }
+      console.log(`Detectado "no próximo mês" (sem dia específico), ajustado para ${targetDate.format('DD/MM/YYYY')}`);
+      dateAdjusted = true;
+    }
+
+    if (lowerMessage.includes('hoje') && !dateAdjusted) {
       console.log('Detectado "hoje", mantendo a data atual');
-      // Não adiciona dias, mantém a data atual
       dateAdjusted = true;
     } else if ((lowerMessage.includes('depois de amanha') || lowerMessage.includes('depois de amanhã')) && !dateAdjusted) {
       console.log('Detectado "depois de amanhã", adicionando 2 dias');
@@ -179,7 +234,7 @@ export default async function handler(req, res) {
     // Converta para Date para o Supabase
     const dataHora = targetDate.toDate();
 
-    // Extraia o título removendo a data/hora, verbos, "hoje/amanhã/depois de amanhã", "semana que vem", dias da semana, "dia X" e "daqui a X dias"
+    // Extraia o título removendo a data/hora, verbos, "hoje/amanhã/depois de amanhã", "semana que vem", dias da semana, "dia X", "daqui a X dias" e "no próximo mês"
     let title = mensagem;
     title = title.replace(/\d{2}\/\d{2}\/\d{4}/gi, '').replace(/às\s*\d{1,2}(?::\d{2})?(?:\s*h)?/gi, '').replace(/às/gi, '').trim();
     title = title.replace(/hoje|amanha|amanhã|depois de amanha|depois de amanhã|semana que vem|próxima semana|proxima semana/gi, '').trim();
@@ -191,6 +246,8 @@ export default async function handler(req, res) {
     title = title.replace(/dia\s+\d{1,2}/gi, '').trim();
     // Remove "daqui a X dias"
     title = title.replace(/daqui\s+a\s+\d{1,2}\s+dias/gi, '').trim();
+    // Remove "no próximo mês"
+    title = title.replace(/no\s+próximo\s+mês|no\s+proximo\s+mes|próximo\s+mês|proximo\s+mes/gi, '').trim();
     title = title.replace(/Compromisso marcado:/gi, '').trim();
     const verbs = ['marque', 'marca', 'anote', 'anota', 'agende', 'agenda'];
     for (const verb of verbs) {
