@@ -24,10 +24,10 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Mensagem é obrigatória' });
     }
 
-    // Crie uma data de referência já no fuso horário local
+    // Crie uma data de referência no fuso horário local
     const referenceDate = dayjs().tz(TIMEZONE).toDate();
 
-    // Parseie a mensagem com chrono-node, usando a data de referência
+    // Parseie a mensagem com chrono-node, forçando a interpretação como hora local
     const parsed = chrono.parse(mensagem, referenceDate, { forwardDate: true });
     if (parsed.length === 0) {
       return res.status(400).json({ error: 'Nenhuma data/hora encontrada na mensagem' });
@@ -40,10 +40,14 @@ export default async function handler(req, res) {
 
     // Construa a data manualmente, tratando a hora como local
     let targetDate = dayjs(referenceDate).tz(TIMEZONE).startOf('day');
-    if (parsedDate.text.toLowerCase().includes('amanhã')) {
+
+    // Verifique "amanhã" diretamente na mensagem original
+    if (mensagem.toLowerCase().includes('amanhã')) {
       targetDate = targetDate.add(1, 'day');
     }
-    targetDate = targetDate.hour(hour).minute(minute).second(0).tz(TIMEZONE);
+
+    // Aplique a hora e minuto parseados
+    targetDate = targetDate.hour(hour).minute(minute).second(0).tz(TIMEZONE, true);
 
     // Converta para Date para o Supabase
     const dataHora = targetDate.toDate();
