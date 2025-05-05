@@ -37,9 +37,12 @@ export default async function handler(req, res) {
     const parsedDate = parsed[0];
     let targetDate = dayjs(referenceDate).tz(TIMEZONE, true);
 
-    // Ajuste manual para "amanhã"
-    if (mensagem.toLowerCase().includes('amanhã')) {
+    // Ajuste manual para variações de "amanhã" e "depois de amanhã"
+    const lowerMessage = mensagem.toLowerCase();
+    if (lowerMessage.includes('amanha') || lowerMessage.includes('amanhã')) {
       targetDate = targetDate.add(1, 'day');
+    } else if (lowerMessage.includes('depois de amanha') || lowerMessage.includes('depois de amanhã')) {
+      targetDate = targetDate.add(2, 'day');
     }
 
     // Ajuste manual se a data específica estiver na mensagem
@@ -56,8 +59,8 @@ export default async function handler(req, res) {
     if (timeMatch) {
       hour = parseInt(timeMatch[1], 10);
       minute = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
-      if (hour === 12 && mensagem.toLowerCase().includes('am')) hour = 0; // Ajuste para AM
-      if (hour < 12 && mensagem.toLowerCase().includes('pm')) hour += 12; // Ajuste para PM
+      if (hour === 12 && lowerMessage.includes('am')) hour = 0; // Ajuste para AM
+      if (hour < 12 && lowerMessage.includes('pm')) hour += 12; // Ajuste para PM
       if (hour > 23) hour = hour % 24; // Normaliza horas acima de 23
     } else {
       return res.status(400).json({ error: 'Hora não encontrada na mensagem' });
@@ -69,12 +72,12 @@ export default async function handler(req, res) {
     // Converta para Date para o Supabase
     const dataHora = targetDate.toDate();
 
-    // Extraia o título removendo a data/hora, verbos e "amanhã"
+    // Extraia o título removendo a data/hora, verbos e "amanhã/depois de amanhã"
     let title = mensagem;
     title = title.replace(/\d{2}\/\d{2}\/\d{4}/gi, '').replace(/às\s*\d{1,2}(?::\d{2})?(?:\s*h)?/gi, '').replace(/às/gi, '').trim();
-    title = title.replace(/amanhã/gi, '').trim();
+    title = title.replace(/amanha|amanhã|depois de amanha|depois de amanhã/gi, '').trim();
     title = title.replace(/Compromisso marcado:/gi, '').trim();
-    const verbs = ['marque', 'agende'];
+    const verbs = ['marque', 'marca', 'anote', 'anota', 'agende', 'agenda'];
     for (const verb of verbs) {
       if (title.toLowerCase().startsWith(verb + ' ')) {
         title = title.substring(verb.length + 1).trim();
