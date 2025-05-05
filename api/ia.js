@@ -52,21 +52,30 @@ export default async function handler(req, res) {
     const lowerMessage = mensagem.toLowerCase();
     let dateAdjusted = false;
 
-    // Verificar "semana que vem" ou "próxima semana"
-    if (lowerMessage.includes('semana que vem') || lowerMessage.includes('próxima semana') || lowerMessage.includes('proxima semana')) {
-      console.log('Detectado "semana que vem", adicionando 7 dias');
+    // Verificar "semana que vem" ou "próxima semana" (sem dia da semana específico)
+    if ((lowerMessage.includes('semana que vem') || lowerMessage.includes('próxima semana') || lowerMessage.includes('proxima semana')) &&
+        !Object.keys(daysOfWeek).some(day => lowerMessage.includes(day + ' da semana que vem') || lowerMessage.includes(day + ' da próxima semana') || lowerMessage.includes(day + ' da proxima semana'))) {
+      console.log('Detectado "semana que vem" (sem dia específico), adicionando 7 dias');
       targetDate = targetDate.add(7, 'day');
       dateAdjusted = true;
     }
 
-    // Verificar dias da semana (com ou sem "próxima")
+    // Verificar dias da semana (com ou sem "próxima" ou "da semana que vem")
     let targetDayOfWeek = -1;
     let isNextWeekDay = false;
+    let isWeekAfter = false;
     for (const [dayName, dayNumber] of Object.entries(daysOfWeek)) {
-      if (lowerMessage.includes(dayName)) {
-        if (lowerMessage.includes('próxima ' + dayName) || lowerMessage.includes('proxima ' + dayName)) {
-          isNextWeekDay = true;
-        }
+      if (lowerMessage.includes(dayName + ' da semana que vem') || lowerMessage.includes(dayName + ' da próxima semana') || lowerMessage.includes(dayName + ' da proxima semana')) {
+        targetDayOfWeek = dayNumber;
+        isWeekAfter = true;
+        console.log(`Detectado "${dayName} da semana que vem" (número: ${dayNumber})`);
+        break;
+      } else if (lowerMessage.includes('próxima ' + dayName) || lowerMessage.includes('proxima ' + dayName)) {
+        targetDayOfWeek = dayNumber;
+        isNextWeekDay = true;
+        console.log(`Detectado "próxima ${dayName}" (número: ${dayNumber})`);
+        break;
+      } else if (lowerMessage.includes(dayName)) {
         targetDayOfWeek = dayNumber;
         console.log(`Detectado dia da semana: ${dayName} (número: ${dayNumber})`);
         break;
@@ -76,7 +85,15 @@ export default async function handler(req, res) {
     if (targetDayOfWeek !== -1) {
       const currentDayOfWeek = targetDate.day(); // 0 = domingo, 1 = segunda, ..., 6 = sábado
       let daysToAdd = targetDayOfWeek - currentDayOfWeek;
-      if (daysToAdd <= 0 || isNextWeekDay) {
+      if (isWeekAfter) {
+        // Se for "quarta-feira da semana que vem", primeiro adiciona 7 dias, depois ajusta para o dia da semana
+        targetDate = targetDate.add(7, 'day');
+        const newCurrentDayOfWeek = targetDate.day();
+        daysToAdd = targetDayOfWeek - newCurrentDayOfWeek;
+        if (daysToAdd <= 0) {
+          daysToAdd += 7; // Garante que seja o dia da semana correto na próxima semana
+        }
+      } else if (daysToAdd <= 0 || isNextWeekDay) {
         daysToAdd += 7; // Garante que seja a próxima ocorrência do dia
       }
       targetDate = targetDate.add(daysToAdd, 'day');
@@ -128,9 +145,9 @@ export default async function handler(req, res) {
     let title = mensagem;
     title = title.replace(/\d{2}\/\d{2}\/\d{4}/gi, '').replace(/às\s*\d{1,2}(?::\d{2})?(?:\s*h)?/gi, '').replace(/às/gi, '').trim();
     title = title.replace(/hoje|amanha|amanhã|depois de amanha|depois de amanhã|semana que vem|próxima semana|proxima semana/gi, '').trim();
-    // Remove dias da semana (com ou sem "próxima")
+    // Remove dias da semana (com ou sem "próxima" ou "da semana que vem")
     for (const dayName of Object.keys(daysOfWeek)) {
-      title = title.replace(new RegExp(`próxima ${dayName}|proxima ${dayName}|${dayName}`, 'gi'), '').trim();
+      title = title.replace(new RegExp(`próxima ${dayName}|proxima ${dayName}|${dayName} da semana que vem|${dayName} da próxima semana|${dayName} da proxima semana|${dayName}`, 'gi'), '').trim();
     }
     title = title.replace(/Compromisso marcado:/gi, '').trim();
     const verbs = ['marque', 'marca', 'anote', 'anota', 'agende', 'agenda'];
