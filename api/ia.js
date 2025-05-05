@@ -145,7 +145,7 @@ export default async function handler(req, res) {
     // Converta para Date para o Supabase
     const dataHora = targetDate.toDate();
 
-    // Extraia o título removendo a data/hora, verbos, "hoje/amanhã/depois de amanhã", "semana que vem" e dias da semana
+    // Extraia o título removendo a data/hora, verbos, "hoje/amanhã/depois de amanhã", "semana que vem", dias da semana e preposições
     let title = mensagem;
     title = title.replace(/\d{2}\/\d{2}\/\d{4}/gi, '').replace(/às\s*\d{1,2}(?::\d{2})?(?:\s*h)?/gi, '').replace(/às/gi, '').trim();
     title = title.replace(/hoje|amanha|amanhã|depois de amanha|depois de amanhã|semana que vem|próxima semana|proxima semana/gi, '').trim();
@@ -153,6 +153,8 @@ export default async function handler(req, res) {
     for (const dayName of Object.keys(daysOfWeek)) {
       title = title.replace(new RegExp(`próxima ${dayName}|proxima ${dayName}|${dayName} da semana que vem|${dayName} da próxima semana|${dayName} da proxima semana|${dayName}`, 'gi'), '').trim();
     }
+    // Remove preposições "da" e "de"
+    title = title.replace(/\s+da\s+|\s+de\s+/gi, ' ').trim();
     title = title.replace(/Compromisso marcado:/gi, '').trim();
     const verbs = ['marque', 'marca', 'anote', 'anota', 'agende', 'agenda'];
     for (const verb of verbs) {
