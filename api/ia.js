@@ -17,6 +17,17 @@ const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+// Mapeamento de dias da semana para números (0 = domingo, 1 = segunda, ..., 6 = sábado)
+const daysOfWeek = {
+  'domingo': 0,
+  'segunda-feira': 1, 'segunda': 1,
+  'terça-feira': 2, 'terça': 2,
+  'quarta-feira': 3, 'quarta': 3,
+  'quinta-feira': 4, 'quinta': 4,
+  'sexta-feira': 5, 'sexta': 5,
+  'sábado': 6, 'sabado': 6
+};
+
 export default async function handler(req, res) {
   if (req.method === 'POST') {
     const { mensagem } = req.body;
@@ -37,10 +48,29 @@ export default async function handler(req, res) {
     const parsedDate = parsed[0];
     let targetDate = dayjs(referenceDate).tz(TIMEZONE, true);
 
-    // Ajuste manual para variações de "hoje", "amanhã" e "depois de amanhã" (prioridade manual)
+    // Ajuste manual para variações de "hoje", "amanhã", "depois de amanhã" e dias da semana
     const lowerMessage = mensagem.toLowerCase();
     let dateAdjusted = false;
-    if (lowerMessage.includes('hoje')) {
+
+    // Verificar dias da semana
+    let targetDayOfWeek = -1;
+    for (const [dayName, dayNumber] of Object.entries(daysOfWeek)) {
+      if (lowerMessage.includes(dayName)) {
+        targetDayOfWeek = dayNumber;
+        console.log(`Detectado dia da semana: ${dayName} (número: ${dayNumber})`);
+        break;
+      }
+    }
+
+    if (targetDayOfWeek !== -1) {
+      const currentDayOfWeek = targetDate.day(); // 0 = domingo, 1 = segunda, ..., 6 = sábado
+      let daysToAdd = targetDayOfWeek - currentDayOfWeek;
+      if (daysToAdd <= 0) {
+        daysToAdd += 7; // Garante que seja a próxima ocorrência do dia
+      }
+      targetDate = targetDate.add(daysToAdd, 'day');
+      dateAdjusted = true;
+    } else if (lowerMessage.includes('hoje')) {
       console.log('Detectado "hoje", mantendo a data atual');
       // Não adiciona dias, mantém a data atual
       dateAdjusted = true;
@@ -83,10 +113,14 @@ export default async function handler(req, res) {
     // Converta para Date para o Supabase
     const dataHora = targetDate.toDate();
 
-    // Extraia o título removendo a data/hora, verbos e "hoje/amanhã/depois de amanhã"
+    // Extraia o título removendo a data/hora, verbos, "hoje/amanhã/depois de amanhã" e dias da semana
     let title = mensagem;
     title = title.replace(/\d{2}\/\d{2}\/\d{4}/gi, '').replace(/às\s*\d{1,2}(?::\d{2})?(?:\s*h)?/gi, '').replace(/às/gi, '').trim();
     title = title.replace(/hoje|amanha|amanhã|depois de amanha|depois de amanhã/gi, '').trim();
+    // Remove dias da semana
+    for (const dayName of Object.keys(daysOfWeek)) {
+      title = title.replace(new RegExp(dayName, 'gi'), '').trim();
+    }
     title = title.replace(/Compromisso marcado:/gi, '').trim();
     const verbs = ['marque', 'marca', 'anote', 'anota', 'agende', 'agenda'];
     for (const verb of verbs) {
