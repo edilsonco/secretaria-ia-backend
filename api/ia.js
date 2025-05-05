@@ -50,7 +50,7 @@ export default async function handler(req, res) {
     }
 
     // Extraia a hora manualmente usando regex (aceitando "às HHh" ou "às HH:MM")
-    const timeMatch = mensagem.match(/às\s*(\d{1,2})(?::(\d{2}))?h?/i);
+    const timeMatch = mensagem.match(/às\s*(\d{1,2})(?::(\d{2}))?(?:\s*h)?/i);
     let hour = 0;
     let minute = 0;
     if (timeMatch) {
@@ -60,9 +60,7 @@ export default async function handler(req, res) {
       if (hour < 12 && mensagem.toLowerCase().includes('pm')) hour += 12; // Ajuste para PM
       if (hour > 23) hour = hour % 24; // Normaliza horas acima de 23
     } else {
-      console.log('Hora não encontrada por regex, usando fallback chrono-node:', parsedDate.start.get('hour'), parsedDate.start.get('minute'));
-      hour = parsedDate.start.get('hour');
-      minute = parsedDate.start.get('minute') || 0;
+      return res.status(400).json({ error: 'Hora não encontrada na mensagem' });
     }
 
     // Aplique a hora e minuto manualmente
@@ -73,7 +71,7 @@ export default async function handler(req, res) {
 
     // Extraia o título removendo a data/hora, verbos e "amanhã"
     let title = mensagem;
-    title = title.replace(/\d{2}\/\d{2}\/\d{4}/gi, '').replace(/às\s*\d{1,2}(:\d{2})?h?/gi, '').replace(/às/gi, '').trim();
+    title = title.replace(/\d{2}\/\d{2}\/\d{4}/gi, '').replace(/às\s*\d{1,2}(?::\d{2})?(?:\s*h)?/gi, '').replace(/às/gi, '').trim();
     title = title.replace(/amanhã/gi, '').trim();
     title = title.replace(/Compromisso marcado:/gi, '').trim();
     const verbs = ['marque', 'agende'];
