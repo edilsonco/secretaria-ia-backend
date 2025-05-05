@@ -28,7 +28,7 @@ export default async function handler(req, res) {
     const referenceDate = dayjs().tz(TIMEZONE).toDate();
 
     // Parseie a mensagem com chrono-node, forçando a interpretação como hora local
-    const parsed = chrono.parse(mensagem, referenceDate, { forwardDate: true, timezones: [TIMEZONE] });
+    const parsed = chrono.parse(mensagem, referenceDate, { forwardDate: true, timezones: [TIMEZONE], hourFormat: 24 });
     if (parsed.length === 0) {
       return res.status(400).json({ error: 'Nenhuma data/hora encontrada na mensagem' });
     }
@@ -44,8 +44,12 @@ export default async function handler(req, res) {
       targetDate = targetDate.year(parseInt(year)).month(parseInt(month) - 1).date(parseInt(day));
     }
 
-    // Aplique a hora e minuto parseados
-    targetDate = targetDate.hour(parsedDate.start.get('hour')).minute(parsedDate.start.get('minute') || 0).second(0);
+    // Aplique a hora e minuto parseados, forçando o formato 24h
+    let hour = parsedDate.start.get('hour');
+    let minute = parsedDate.start.get('minute') || 0;
+    if (hour === 12 && mensagem.toLowerCase().includes('am')) hour = 0; // Ajuste para AM
+    if (hour < 12 && mensagem.toLowerCase().includes('pm')) hour += 12; // Ajuste para PM
+    targetDate = targetDate.hour(hour).minute(minute).second(0);
 
     // Converta para Date para o Supabase
     const dataHora = targetDate.toDate();
