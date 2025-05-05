@@ -37,10 +37,14 @@ export default async function handler(req, res) {
     const parsedDate = parsed[0];
     let targetDate = dayjs(referenceDate).tz(TIMEZONE, true);
 
-    // Ajuste manual para variações de "amanhã" e "depois de amanhã" (prioridade manual)
+    // Ajuste manual para variações de "hoje", "amanhã" e "depois de amanhã" (prioridade manual)
     const lowerMessage = mensagem.toLowerCase();
     let dateAdjusted = false;
-    if (lowerMessage.includes('depois de amanha') || lowerMessage.includes('depois de amanhã')) {
+    if (lowerMessage.includes('hoje')) {
+      console.log('Detectado "hoje", mantendo a data atual');
+      // Não adiciona dias, mantém a data atual
+      dateAdjusted = true;
+    } else if (lowerMessage.includes('depois de amanha') || lowerMessage.includes('depois de amanhã')) {
       console.log('Detectado "depois de amanhã", adicionando 2 dias');
       targetDate = targetDate.add(2, 'day');
       dateAdjusted = true;
@@ -79,10 +83,10 @@ export default async function handler(req, res) {
     // Converta para Date para o Supabase
     const dataHora = targetDate.toDate();
 
-    // Extraia o título removendo a data/hora, verbos e "amanhã/depois de amanhã"
+    // Extraia o título removendo a data/hora, verbos e "hoje/amanhã/depois de amanhã"
     let title = mensagem;
     title = title.replace(/\d{2}\/\d{2}\/\d{4}/gi, '').replace(/às\s*\d{1,2}(?::\d{2})?(?:\s*h)?/gi, '').replace(/às/gi, '').trim();
-    title = title.replace(/amanha|amanhã|depois de amanha|depois de amanhã/gi, '').trim();
+    title = title.replace(/hoje|amanha|amanhã|depois de amanha|depois de amanhã/gi, '').trim();
     title = title.replace(/Compromisso marcado:/gi, '').trim();
     const verbs = ['marque', 'marca', 'anote', 'anota', 'agende', 'agenda'];
     for (const verb of verbs) {
