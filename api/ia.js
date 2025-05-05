@@ -37,12 +37,17 @@ export default async function handler(req, res) {
     const parsedDate = parsed[0];
     let targetDate = dayjs(referenceDate).tz(TIMEZONE, true);
 
-    // Ajuste manual para variações de "amanhã" e "depois de amanhã"
+    // Ajuste manual para variações de "amanhã" e "depois de amanhã" (prioridade manual)
     const lowerMessage = mensagem.toLowerCase();
-    if (lowerMessage.includes('amanha') || lowerMessage.includes('amanhã')) {
-      targetDate = targetDate.add(1, 'day');
-    } else if (lowerMessage.includes('depois de amanha') || lowerMessage.includes('depois de amanhã')) {
+    let dateAdjusted = false;
+    if (lowerMessage.includes('depois de amanha') || lowerMessage.includes('depois de amanhã')) {
+      console.log('Detectado "depois de amanhã", adicionando 2 dias');
       targetDate = targetDate.add(2, 'day');
+      dateAdjusted = true;
+    } else if (lowerMessage.includes('amanha') || lowerMessage.includes('amanhã')) {
+      console.log('Detectado "amanhã", adicionando 1 dia');
+      targetDate = targetDate.add(1, 'day');
+      dateAdjusted = true;
     }
 
     // Ajuste manual se a data específica estiver na mensagem
@@ -50,6 +55,8 @@ export default async function handler(req, res) {
     if (dateMatch) {
       const [day, month, year] = dateMatch[0].split('/');
       targetDate = targetDate.year(parseInt(year)).month(parseInt(month) - 1).date(parseInt(day));
+    } else if (!dateAdjusted && parsedDate.start) {
+      targetDate = dayjs(parsedDate.start.date()).tz(TIMEZONE, true);
     }
 
     // Extraia a hora manualmente usando regex (aceitando "às HHh" ou "às HH:MM")
