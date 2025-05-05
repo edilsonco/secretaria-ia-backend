@@ -86,11 +86,15 @@ export default async function handler(req, res) {
       const currentDayOfWeek = targetDate.day(); // 0 = domingo, 1 = segunda, ..., 6 = sábado
       let daysToAdd = targetDayOfWeek - currentDayOfWeek;
       if (isWeekAfter) {
-        // Se for "quarta-feira da semana que vem", primeiro adiciona 7 dias, depois ajusta para o dia da semana
+        // Se for "segunda-feira da semana que vem", primeiro adiciona 7 dias, depois ajusta para o dia da semana
         targetDate = targetDate.add(7, 'day');
         const newCurrentDayOfWeek = targetDate.day();
         daysToAdd = targetDayOfWeek - newCurrentDayOfWeek;
-        if (daysToAdd <= 0) {
+        // Se o dia da semana for o mesmo que o dia atual (ex.: hoje é segunda e pedimos "segunda-feira da semana que vem"),
+        // não precisa ajustar mais, pois já adicionamos 7 dias
+        if (targetDayOfWeek === currentDayOfWeek) {
+          daysToAdd = 0;
+        } else if (daysToAdd < 0) {
           daysToAdd += 7; // Garante que seja o dia da semana correto na próxima semana
         }
       } else if (daysToAdd <= 0 || isNextWeekDay) {
