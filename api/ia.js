@@ -280,16 +280,27 @@ export default async function handler(req, res) {
 
   // Extraia o título
   let title = mensagem;
-  title = title.replace(/\d{2}\/\d{2}\/\d{4}/gi, '').replace(/às\s*\d{1,2}(?::\d{2})?(?:\s*h)?/gi, '').replace(/às/gi, '').trim();
+  console.log('Título inicial:', JSON.stringify(title));
+  title = title.replace(/\d{2}\/\d{2}\/\d{4}/gi, '').trim();
+  console.log('Após remover data (DD/MM/YYYY):', JSON.stringify(title));
+  title = title.replace(/às\s*\d{1,2}(?::\d{2})?(?:\s*h)?/gi, '').replace(/às/gi, '').trim();
+  console.log('Após remover hora:', JSON.stringify(title));
   title = title.replace(/hoje|amanha|amanhã|depois de amanha|depois de amanhã|semana que vem|próxima semana|proxima semana/gi, '').trim();
+  console.log('Após remover palavras de tempo:', JSON.stringify(title));
   for (const dayName of Object.keys(daysOfWeek)) {
     title = title.replace(new RegExp(`próxima ${dayName}|proxima ${dayName}|${dayName} da semana que vem|${dayName} da próxima semana|${dayName} da proxima semana|${dayName}`, 'gi'), '').trim();
   }
+  console.log('Após remover dias da semana:', JSON.stringify(title));
   title = title.replace(/dia\s+\d{1,2}/gi, '').trim();
+  console.log('Após remover "dia X":', JSON.stringify(title));
   title = title.replace(/daqui\s+a\s+\d{1,2}\s+dias/gi, '').trim();
+  console.log('Após remover "daqui a X dias":', JSON.stringify(title));
   title = title.replace(/no\s+próximo\s+mês|no\s+proximo\s+mes|próximo\s+mês|proximo\s+mes/gi, '').trim();
+  console.log('Após remover "no próximo mês":', JSON.stringify(title));
   title = title.replace(/no\s+próximo\s+ano|no\s+proximo\s+ano|próximo\s+ano|proximo\s+ano/gi, '').trim();
+  console.log('Após remover "no próximo ano":', JSON.stringify(title));
   title = title.replace(/Compromisso marcado:/gi, '').trim();
+  console.log('Após remover "Compromisso marcado":', JSON.stringify(title));
   const verbs = ['marque', 'marca', 'anote', 'anota', 'agende', 'agenda'];
   for (const verb of verbs) {
     if (title.toLowerCase().startsWith(verb + ' ')) {
@@ -297,13 +308,16 @@ export default async function handler(req, res) {
       break;
     }
   }
+  console.log('Após remover verbo inicial:', JSON.stringify(title));
   title = title.replace(/^\s*uma?\s+/i, '').trim();
+  console.log('Após remover "uma"/"um":', JSON.stringify(title));
   title = title.replace(/\b(da|de)\b/gi, '').trim();
+  console.log('Após remover "da"/"de":', JSON.stringify(title));
   title = title.replace(/\s+/g, ' ').trim();
-
-  console.log('Título após extração:', JSON.stringify(title));
+  console.log('Título final após extração:', JSON.stringify(title));
 
   if (!title || title.trim().length === 0) {
+    console.log('Validação de título vazio ativada');
     return res.status(400).json({ error: 'Título do compromisso não pode ser vazio.' });
   }
 
