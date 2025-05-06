@@ -298,9 +298,12 @@ export default async function handler(req, res) {
     }
   }
   title = title.replace(/^\s*uma?\s+/i, '').trim();
-  title = title.replace(/\b(da|de)\b/gi, '').replace(/\s+/g, ' ').trim();
+  title = title.replace(/\b(da|de)\b/gi, '').trim();
+  title = title.replace(/\s+/g, ' ').trim();
 
-  if (!title) {
+  console.log('Título após extração:', JSON.stringify(title));
+
+  if (!title || title.trim().length === 0) {
     return res.status(400).json({ error: 'Título do compromisso não pode ser vazio.' });
   }
 
