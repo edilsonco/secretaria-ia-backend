@@ -27,18 +27,6 @@ const daysOfWeek = {
   'sábado': 6, 'sabado': 6
 };
 
-// Função para validar o título
-function validateTitle(title) {
-  console.log('Validando título:', JSON.stringify(title));
-  console.log('Comprimento do título:', title.length);
-  console.log('Caracteres do título (ASCII):', title.split('').map(char => char.charCodeAt(0)));
-  console.log('Condição !title:', !title);
-  console.log('Condição title.trim().length === 0:', title.trim().length === 0);
-  const isInvalid = !title || title.trim().length === 0;
-  console.log('Título é inválido:', isInvalid);
-  return isInvalid;
-}
-
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', ['POST']);
@@ -327,9 +315,13 @@ export default async function handler(req, res) {
   console.log('Após remover "da"/"de":', JSON.stringify(title));
   title = title.replace(/\s+/g, ' ').trim();
   console.log('Título final após extração:', JSON.stringify(title));
+  console.log('Comprimento do título:', title.length);
+  console.log('Caracteres do título (ASCII):', title.split('').map(char => char.charCodeAt(0)));
+  console.log('Condição !title:', !title);
+  console.log('Condição title.trim().length === 0:', title.trim().length === 0);
 
-  // Validação do título usando a função isolada
-  const isTitleInvalid = validateTitle(title);
+  // Validação do título diretamente no fluxo principal
+  const isTitleInvalid = !title || title.trim().length === 0;
   console.log('Resultado da validação (isTitleInvalid):', isTitleInvalid);
   if (isTitleInvalid) {
     console.log('Validação de título vazio ativada');
