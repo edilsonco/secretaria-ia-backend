@@ -41,6 +41,7 @@ export default async function handler(req, res) {
 
   // Crie uma data de referência no fuso horário local
   const referenceDate = dayjs().tz(TIMEZONE).toDate();
+  console.log('Data de referência:', referenceDate);
 
   // Parseie a mensagem com chrono-node para a data
   const parsed = chrono.parse(mensagem, referenceDate, { forwardDate: true, timezones: [TIMEZONE] });
@@ -51,6 +52,7 @@ export default async function handler(req, res) {
   // Use o primeiro resultado de parsing para a data
   const parsedDate = parsed[0];
   let targetDate = dayjs(referenceDate).tz(TIMEZONE, true);
+  console.log('Data inicial (targetDate):', targetDate.format('DD/MM/YYYY'));
 
   // Ajuste manual para variações de tempo
   const lowerMessage = mensagem.toLowerCase();
@@ -101,6 +103,7 @@ export default async function handler(req, res) {
         }
       }
     }
+    console.log('Após "dia X":', targetDate.format('DD/MM/YYYY'));
     dateAdjusted = true;
   }
 
@@ -112,6 +115,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Número de dias inválido. Use um valor maior que 0.' });
     }
     targetDate = targetDate.add(daysToAdd, 'day');
+    console.log('Após "daqui a X dias":', targetDate.format('DD/MM/YYYY'));
     dateAdjusted = true;
   }
 
@@ -183,6 +187,7 @@ export default async function handler(req, res) {
       }
       targetDate = targetDate.add(daysToAdd, 'day');
     }
+    console.log('Após "dia da semana":', targetDate.format('DD/MM/YYYY'));
     dateAdjusted = true;
   }
 
@@ -191,6 +196,7 @@ export default async function handler(req, res) {
       !Object.keys(daysOfWeek).some(day => lowerMessage.includes(day + ' da semana que vem') || lowerMessage.includes(day + ' da próxima semana') || lowerMessage.includes(day + ' da proxima semana')) &&
       !dateAdjusted) {
     targetDate = targetDate.add(7, 'day');
+    console.log('Após "semana que vem":', targetDate.format('DD/MM/YYYY'));
     dateAdjusted = true;
   }
 
@@ -206,6 +212,7 @@ export default async function handler(req, res) {
     if (targetDate.month() < currentMonth) {
       targetDate = targetDate.year(currentYear + 1);
     }
+    console.log('Após "no próximo mês":', targetDate.format('DD/MM/YYYY'));
     dateAdjusted = true;
   }
 
@@ -218,17 +225,21 @@ export default async function handler(req, res) {
     if (targetDate.date() !== currentDay) {
       targetDate = targetDate.endOf('month');
     }
+    console.log('Após "no próximo ano":', targetDate.format('DD/MM/YYYY'));
     dateAdjusted = true;
   }
 
   // Verificar "hoje", "amanhã", "depois de amanhã" com verificações mais estritas
   if (lowerMessage.includes('hoje') && !dateAdjusted) {
+    console.log('Após "hoje":', targetDate.format('DD/MM/YYYY'));
     dateAdjusted = true;
   } else if ((lowerMessage.includes('depois de amanha') || lowerMessage.includes('depois de amanhã')) && !dateAdjusted) {
     targetDate = targetDate.add(2, 'day');
+    console.log('Após "depois de amanhã":', targetDate.format('DD/MM/YYYY'));
     dateAdjusted = true;
   } else if ((lowerMessage === 'amanhã' || lowerMessage.includes(' amanhã ') || lowerMessage.includes(' amanhã,') || lowerMessage.endsWith(' amanhã') || lowerMessage.includes(' amanha ') || lowerMessage.includes(' amanha,') || lowerMessage.endsWith(' amanha')) && !dateAdjusted) {
     targetDate = targetDate.add(1, 'day');
+    console.log('Após "amanhã":', targetDate.format('DD/MM/YYYY'));
     dateAdjusted = true;
   }
 
@@ -243,13 +254,12 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Data inválida. Use o formato DD/MM/YYYY com valores válidos.' });
     }
     targetDate = targetDate.year(parsedYear).month(parsedMonth).date(parsedDay);
+    console.log('Após "data específica":', targetDate.format('DD/MM/YYYY'));
     dateAdjusted = true;
   }
 
   // Evitar o fallback do chrono-node se já ajustamos a data manualmente
-  if (!dateAdjusted && parsedDate.start) {
-    targetDate = dayjs(parsedDate.start.date()).tz(TIMEZONE, true);
-  } else if (!dateAdjusted) {
+  if (!dateAdjusted) {
     return res.status(400).json({ error: 'Data não encontrada ou não reconhecida na mensagem.' });
   }
 
@@ -271,6 +281,7 @@ export default async function handler(req, res) {
 
   // Aplique a hora e minuto manualmente
   targetDate = targetDate.hour(hour).minute(minute).second(0);
+  console.log('Após ajuste de hora:', targetDate.format('DD/MM/YYYY HH:mm'));
 
   // Converta para Date para o Supabase
   const dataHora = targetDate.toDate();
