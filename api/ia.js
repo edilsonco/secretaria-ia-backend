@@ -1,5 +1,4 @@
 import { createClient } from '@supabase/supabase-js';
-import * as chrono from 'chrono-node';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
@@ -40,18 +39,11 @@ export default async function handler(req, res) {
   }
 
   // Crie uma data de referência no fuso horário local
-  const referenceDate = dayjs().tz(TIMEZONE).toDate();
-  console.log('Data de referência:', referenceDate);
+  const referenceDate = dayjs().tz(TIMEZONE);
+  console.log('Data de referência:', referenceDate.format('DD/MM/YYYY'));
 
-  // Parseie a mensagem com chrono-node para a data
-  const parsed = chrono.parse(mensagem, referenceDate, { forwardDate: true, timezones: [TIMEZONE] });
-  if (parsed.length === 0) {
-    return res.status(400).json({ error: 'Nenhuma data/hora encontrada na mensagem' });
-  }
-
-  // Use o primeiro resultado de parsing para a data
-  const parsedDate = parsed[0];
-  let targetDate = dayjs(referenceDate).tz(TIMEZONE, true);
+  // Inicialize targetDate com a data atual
+  let targetDate = dayjs(referenceDate).tz(TIMEZONE);
   console.log('Data inicial (targetDate):', targetDate.format('DD/MM/YYYY'));
 
   // Ajuste manual para variações de tempo
@@ -258,7 +250,7 @@ export default async function handler(req, res) {
     dateAdjusted = true;
   }
 
-  // Evitar o fallback do chrono-node se já ajustamos a data manualmente
+  // Evitar o fallback se já ajustamos a data manualmente
   if (!dateAdjusted) {
     return res.status(400).json({ error: 'Data não encontrada ou não reconhecida na mensagem.' });
   }
