@@ -327,16 +327,15 @@ export default async function handler(req, res) {
   console.log('Após remover "da"/"de":', JSON.stringify(title));
   title = title.replace(/\s+/g, ' ').trim();
   console.log('Título final após extração:', JSON.stringify(title));
-  console.log('Comprimento do título:', title.length);
-  console.log('Caracteres do título (ASCII):', title.split('').map(char => char.charCodeAt(0)));
-  console.log('Condição !title:', !title);
-  console.log('Condição title.trim().length === 0:', title.trim().length === 0);
 
   // Validação do título usando a função isolada
-  if (validateTitle(title)) {
+  const isTitleInvalid = validateTitle(title);
+  console.log('Resultado da validação (isTitleInvalid):', isTitleInvalid);
+  if (isTitleInvalid) {
     console.log('Validação de título vazio ativada');
     return res.status(400).json({ error: 'Título do compromisso não pode ser vazio.' });
   }
+  console.log('Validação passou, prosseguindo com o salvamento...');
 
   // Insira o registro no Supabase
   const { data, error } = await supabase
